@@ -35,6 +35,79 @@ const CATEGORY_COLOR_VAR = { do: "var(--do-color)", want: "var(--want-color)", c
 
 const STAMPS = ["⭐️", "🌈", "🍀", "🐣", "🎈", "🍓", "🐬", "🌻", "🦋", "🍩"];
 
+/* ============================================================================
+   2-1. 効果音（Web Audio APIで生成。音声ファイルは不要）
+   チェックON＝シャキン（剣を抜く音）／チェックOFF＝カサッ（紙が擦れる音）／
+   コンプリート＝ファンファーレ
+   ============================================================================ */
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+function playTone(freq, startTime, duration, type, gainValue) {
+  const ctx = getAudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startTime);
+  gain.gain.setValueAtTime(gainValue, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+}
+function playNoiseBurst(startTime, duration, filterType, filterFreq, gainValue) {
+  const ctx = getAudioCtx();
+  const bufferSize = Math.max(1, Math.floor(ctx.sampleRate * duration));
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = filterType;
+  filter.frequency.value = filterFreq;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(gainValue, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  noise.connect(filter).connect(gain).connect(ctx.destination);
+  noise.start(startTime);
+}
+// チェックON：「シャキン」（高音の下降スイープ＋金属的なノイズ）
+function playCheckOnSound() {
+  try {
+    const t = getAudioCtx().currentTime;
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(2000, t);
+    osc.frequency.exponentialRampToValueAtTime(600, t + 0.13);
+    gain.gain.setValueAtTime(0.16, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.16);
+    playNoiseBurst(t, 0.07, "highpass", 3500, 0.07);
+  } catch (e) { /* Web Audio非対応環境では無音でスキップ */ }
+}
+// チェックOFF：「カサッ」（紙が擦れるような短いノイズ）
+function playCheckOffSound() {
+  try {
+    const t = getAudioCtx().currentTime;
+    playNoiseBurst(t, 0.11, "bandpass", 1200, 0.11);
+  } catch (e) { /* noop */ }
+}
+// コンプリート：レベルアップ風ファンファーレ（上昇アルペジオ）
+function playCompleteFanfare() {
+  try {
+    const t = getAudioCtx().currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    notes.forEach((f, i) => playTone(f, t + i * 0.1, 0.3, "square", 0.13));
+  } catch (e) { /* noop */ }
+}
+
 const DEFAULT_SETTINGS = {
   furiganaMode: "grade",   // always | grade | none
   clockMode: "both",       // analog | digital | both
@@ -335,7 +408,7 @@ function renderItemCard(item, editMode, draggable, interactive = true) {
       </button>
       <div class="item-body">
         <div class="item-name-row">
-          <span class="item-name">${nameHtml}</span>
+          <span class="item-name ${item.checked ? "checked" : ""}">${nameHtml}</span>
           ${item.checked ? `<span class="done-badge">できた！</span>` : ""}
           ${timeBadge}
         </div>
@@ -531,6 +604,7 @@ let pendingCompletionKind = null; // "do" | "challenge"
 
 function showConfettiAndComplete(kind) {
   pendingCompletionKind = kind;
+  playCompleteFanfare();
   const layer = document.getElementById("confetti-layer");
   layer.classList.remove("hidden");
   layer.innerHTML = "";
@@ -719,7 +793,10 @@ async function onAppClick(e) {
   if (action === "toggle-item") {
     const items = currentItemsRef();
     const it = items.find((x) => x.id === btn.dataset.itemId);
-    if (it) it.checked = !it.checked;
+    if (it) {
+      it.checked = !it.checked;
+      if (it.checked) playCheckOnSound(); else playCheckOffSound();
+    }
     persistDailyIfCreated();
     checkCompletion();
     render();
