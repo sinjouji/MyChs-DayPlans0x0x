@@ -88,7 +88,12 @@ function dateIsPast(d) { return d < state.today; }
 function dateIsFuture(d) { return d > state.today; }
 
 function emptyDaily(date) {
-  return { date, created: false, items: [], stamp: null, mood: null, note: "", completeShown: false };
+  return {
+    date, created: false, items: [], mood: null, note: "",
+    stamp: null, completeShown: false,               // 「やること」完了のスタンプ
+    challengeStamp: null, challengeCompleteShown: false, // 「チャレンジ」完了のスタンプ（初回のみ）
+    parentNote: "", parentChecked: false,             // おかあさんチェック
+  };
 }
 
 // テンプレート1件 → デイリープラン項目1件 へコピー（テンプレとデイリーは以後は独立データ）
@@ -330,7 +335,8 @@ function renderItemCard(item, editMode, draggable, interactive = true) {
       </button>
       <div class="item-body">
         <div class="item-name-row">
-          <span class="item-name ${item.checked ? "checked" : ""}">${nameHtml}</span>
+          <span class="item-name">${nameHtml}</span>
+          ${item.checked ? `<span class="done-badge">できた！</span>` : ""}
           ${timeBadge}
         </div>
         ${item.memo ? `<div class="item-memo">${esc(item.memo)}</div>` : ""}
@@ -420,13 +426,27 @@ function renderCreateScreen() {
    左カラム = やること・時間設定がある項目
    右カラム = 時計（大きく表示）+ チャレンジ・やりたいこと
 ---- */
-function splitColumns(visibleItems) {
-  const leftAll = visibleItems.filter((it) => it.category === "do" || it.start);
-  const rightAll = visibleItems.filter((it) => !(it.category === "do" || it.start));
-  const leftTimed = leftAll.filter((it) => it.start).sort((a, b) => a.start.localeCompare(b.start));
-  const leftUntimed = leftAll.filter((it) => !it.start).sort((a, b) => a.order - b.order);
-  const rightSorted = [...rightAll].sort((a, b) => a.order - b.order);
-  return { leftTimed, leftUntimed, rightSorted };
+function orderAllItems(visibleItems) {
+  const timed = visibleItems.filter((it) => it.start).sort((a, b) => a.start.localeCompare(b.start));
+  const untimedDo = visibleItems.filter((it) => !it.start && it.category === "do").sort((a, b) => a.order - b.order);
+  const untimedWant = visibleItems.filter((it) => !it.start && it.category === "want").sort((a, b) => a.order - b.order);
+  const untimedChallenge = visibleItems.filter((it) => !it.start && it.category === "challenge").sort((a, b) => a.order - b.order);
+  return { timed, untimedDo, untimedWant, untimedChallenge };
+}
+
+// おかあさんチェック（一言メッセージ／確認スタンプ）。おうちの人パスコードで保護する
+function renderMomCheckArea() {
+  const d = state.daily;
+  const hasNote = !!(d.parentNote && d.parentNote.trim());
+  return `
+    <div class="mom-check-area">
+      <div class="mom-check-title">おかあさんチェック</div>
+      <div class="mom-note ${hasNote ? "" : "mom-note-empty"}">${hasNote ? esc(d.parentNote) : "ひとことメッセージ未設定"}</div>
+      <div class="mom-check-actions">
+        <button class="mom-edit-btn" data-action="edit-mom-note">✏️ 編集</button>
+        <button class="mom-check-btn ${d.parentChecked ? "checked" : ""}" data-action="toggle-mom-check">見ました💮</button>
+      </div>
+    </div>`;
 }
 
 function renderHomeScreen() {
@@ -436,18 +456,19 @@ function renderHomeScreen() {
   const visibleItems = state.editMode
     ? state.daily.items
     : state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
-  const { leftTimed, leftUntimed, rightSorted } = splitColumns(visibleItems);
-
-  const leftHtml = (leftTimed.length + leftUntimed.length) === 0
-    ? `<div class="empty-hint">予定なし</div>`
-    : leftTimed.map((it) => renderItemCard(it, state.editMode, false)).join("")
-      + leftUntimed.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("");
+  const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
 
   const challengeHint = !state.editMode && state.settings.challengeEnabled && !challengeUnlocked && state.daily.items.some((it) => it.category === "challenge")
     ? `<div class="challenge-hint">「やること」が終わったら チャレンジ が出てくるよ</div>` : "";
-  const rightHtml = (rightSorted.length === 0 && !challengeHint)
-    ? `<div class="empty-hint">予定なし</div>`
-    : rightSorted.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("") + challengeHint;
+
+  // 表示順：時間指定 → やること → やりたいこと → チャレンジ
+  const cardsHtml = timed.map((it) => renderItemCard(it, state.editMode, false)).join("")
+    + untimedDo.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
+    + untimedWant.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
+    + untimedChallenge.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
+    + challengeHint;
+  const totalCount = timed.length + untimedDo.length + untimedWant.length + untimedChallenge.length;
+  const listHtml = (totalCount === 0 && !challengeHint) ? `<div class="empty-hint">予定なし</div>` : cardsHtml;
 
   const bottom = state.editMode
     ? `${renderTemplatePicker()}<div class="bottom-bar"><button class="edit-done-btn" data-action="finish-edit">編集をおわる</button></div>`
@@ -459,17 +480,16 @@ function renderHomeScreen() {
         ${renderDateNav()}
         <div class="home-title">きょうのよてい</div>
         ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
+        ${state.daily.challengeStamp ? `<div class="home-stamp">${state.daily.challengeStamp}</div>` : ""}
       </div>
     </div>
     <div class="item-list ${state.editMode ? "editing" : ""}">
-      <div class="home-col home-col-left">
-        <div class="home-col-title">やること</div>
-        ${leftHtml}
+      <div class="home-col-left">
+        ${listHtml}
       </div>
-      <div class="home-col home-col-right">
+      <div class="home-col-right">
         <div data-clock></div>
-        <div class="home-col-title">チャレンジ・やりたいこと</div>
-        ${rightHtml}
+        ${renderMomCheckArea()}
       </div>
     </div>
     ${bottom}`;
@@ -480,18 +500,14 @@ function renderReadOnlyScreen() {
   if (!state.daily.created) {
     return `
       <div class="home-header"><div>${renderDateNav()}<div class="home-title">きろく</div></div></div>
-      <div class="item-list"><div class="empty-hint">この日の記録はありません</div></div>`;
+      <div class="item-list"><div class="home-col-left"><div class="empty-hint">この日の記録はありません</div></div></div>`;
   }
   const doItems = state.daily.items.filter((it) => it.category === "do");
   const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
   const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
-  const { leftTimed, leftUntimed, rightSorted } = splitColumns(visibleItems);
-  const leftHtml = (leftTimed.length + leftUntimed.length) === 0
-    ? `<div class="empty-hint">記録なし</div>`
-    : leftTimed.concat(leftUntimed).map((it) => renderItemCard(it, false, false, false)).join("");
-  const rightHtml = rightSorted.length === 0
-    ? `<div class="empty-hint">記録なし</div>`
-    : rightSorted.map((it) => renderItemCard(it, false, false, false)).join("");
+  const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
+  const cardsHtml = timed.concat(untimedDo, untimedWant, untimedChallenge).map((it) => renderItemCard(it, false, false, false)).join("");
+  const listHtml = cardsHtml || `<div class="empty-hint">記録なし</div>`;
 
   return `
     <div class="home-header">
@@ -499,23 +515,22 @@ function renderReadOnlyScreen() {
         ${renderDateNav()}
         <div class="home-title">きろく</div>
         ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
+        ${state.daily.challengeStamp ? `<div class="home-stamp">${state.daily.challengeStamp}</div>` : ""}
       </div>
     </div>
     <div class="readonly-hint">過去の記録です（編集はできません）</div>
     <div class="item-list">
-      <div class="home-col home-col-left">
-        <div class="home-col-title">やること</div>
-        ${leftHtml}
-      </div>
-      <div class="home-col home-col-right">
-        <div class="home-col-title">チャレンジ・やりたいこと</div>
-        ${rightHtml}
+      <div class="home-col-left">
+        ${listHtml}
       </div>
     </div>`;
 }
 
 /* ---- 7-8. Complete演出 / スタンプ選択モーダル ---- */
-function showConfettiAndComplete() {
+let pendingCompletionKind = null; // "do" | "challenge"
+
+function showConfettiAndComplete(kind) {
+  pendingCompletionKind = kind;
   const layer = document.getElementById("confetti-layer");
   layer.classList.remove("hidden");
   layer.innerHTML = "";
@@ -536,14 +551,14 @@ function showConfettiAndComplete() {
   setTimeout(() => {
     layer.classList.add("hidden");
     layer.innerHTML = "";
-    openStampModal();
+    openStampModal(kind);
   }, 1800);
 }
 
-function openStampModal() {
+function openStampModal(kind) {
   const messages = state.settings.cheerMessages;
   const msg = messages.length ? messages[Math.floor(Math.random() * messages.length)] : "今日もよくがんばったね";
-  document.getElementById("cheer-message").textContent = msg;
+  document.getElementById("cheer-message").textContent = kind === "challenge" ? `チャレンジクリア！ ${msg}` : msg;
   const grid = document.getElementById("stamp-grid");
   grid.innerHTML = STAMPS.map((s) => `<button class="stamp-option" data-action="pick-stamp" data-stamp="${s}">${s}</button>`).join("");
   document.getElementById("stamp-modal").classList.remove("hidden");
@@ -554,12 +569,20 @@ function openStampModal() {
 document.getElementById("stamp-modal").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-action='pick-stamp']");
   if (!btn) return;
-  state.daily.stamp = btn.dataset.stamp;
-  state.daily.completeShown = true;
+  if (pendingCompletionKind === "challenge") {
+    state.daily.challengeStamp = btn.dataset.stamp;
+    state.daily.challengeCompleteShown = true;
+  } else {
+    state.daily.stamp = btn.dataset.stamp;
+    state.daily.completeShown = true;
+  }
+  pendingCompletionKind = null;
   await fsSaveDailyPlan(state.viewDate, state.daily);
   document.getElementById("stamp-modal").classList.add("hidden");
   render();
+  checkCompletion(); // 同時にもう一方（チャレンジなど）も完了していれば続けて表示する
 });
+
 
 /* ---- 7-9. 設定画面（テンプレート／おうちの人設定） ---- */
 function renderSettingsPanel() {
@@ -601,7 +624,7 @@ function renderTemplateSettings() {
       </div>
     </div>`).join("");
 
-  return `${cards}<button class="add-template-btn" data-action="add-template-def">＋ テンプレートを追加</button>`;
+  return `<div class="template-grid">${cards}</div><button class="add-template-btn" data-action="add-template-def">＋ テンプレートを追加</button>`;
 }
 
 function renderParentSettings() {
@@ -768,6 +791,25 @@ async function onAppClick(e) {
 
   if (action === "start-edit") { state.editMode = true; render(); }
   if (action === "finish-edit") { state.editMode = false; render(); }
+
+  if (action === "edit-mom-note") {
+    const pass = prompt("おうちの人用パスコードを入力してください");
+    if (pass === null) return;
+    if (pass !== state.settings.passcode) { alert("パスコードが違います"); return; }
+    const note = prompt("ひとことメッセージ", state.daily.parentNote || "");
+    if (note === null) return;
+    state.daily.parentNote = note.trim();
+    persistDailyIfCreated();
+    render();
+  }
+  if (action === "toggle-mom-check") {
+    const pass = prompt("おうちの人用パスコードを入力してください");
+    if (pass === null) return;
+    if (pass !== state.settings.passcode) { alert("パスコードが違います"); return; }
+    state.daily.parentChecked = !state.daily.parentChecked;
+    persistDailyIfCreated();
+    render();
+  }
 }
 
 function highlightFreeCat() {
@@ -799,7 +841,7 @@ function onDragOver(e) {
   if (card) e.preventDefault();
 }
 function itemColumnGroup(it) {
-  return it.category === "do" ? "left" : "right";
+  return it.category; // do / want / challenge のブロック内でのみ並び替えられる
 }
 function onDrop(e) {
   const card = e.target.closest(".item-card[draggable='true']");
@@ -834,11 +876,34 @@ function onDrop(e) {
 
 /* ---- 8-2. Complete判定（今日のぶんの「やること」が全てチェックされたか） ---- */
 function checkCompletion() {
-  if (!state.daily.created || state.daily.completeShown) return;
-  if (!dateIsToday(state.viewDate)) return; // 演出は「今日」のみ
+  if (!state.daily.created) return;
+  const isToday = dateIsToday(state.viewDate);
+
+  // 「やること」完了判定（チェックを外して未完了に戻したらスタンプも取り消す）
   const doItems = state.daily.items.filter((it) => it.category === "do");
-  if (doItems.length > 0 && doItems.every((it) => it.checked)) {
-    showConfettiAndComplete();
+  const doAllChecked = doItems.length > 0 && doItems.every((it) => it.checked);
+  if (doAllChecked && !state.daily.completeShown) {
+    if (isToday) { showConfettiAndComplete("do"); persistDailyIfCreated(); return; }
+    state.daily.completeShown = true;
+    persistDailyIfCreated();
+  } else if (!doAllChecked && state.daily.completeShown) {
+    state.daily.completeShown = false;
+    state.daily.stamp = null;
+    persistDailyIfCreated();
+  }
+
+  // 「チャレンジ」完了判定（初回のみスタンプ。チェックを外したら取り消し、再度全完了でまた表示）
+  if (!state.settings.challengeEnabled) return;
+  const challengeItems = state.daily.items.filter((it) => it.category === "challenge");
+  const challengeAllChecked = challengeItems.length > 0 && challengeItems.every((it) => it.checked);
+  if (challengeAllChecked && !state.daily.challengeCompleteShown) {
+    if (isToday) { showConfettiAndComplete("challenge"); persistDailyIfCreated(); return; }
+    state.daily.challengeCompleteShown = true;
+    persistDailyIfCreated();
+  } else if (!challengeAllChecked && state.daily.challengeCompleteShown) {
+    state.daily.challengeCompleteShown = false;
+    state.daily.challengeStamp = null;
+    persistDailyIfCreated();
   }
 }
 
