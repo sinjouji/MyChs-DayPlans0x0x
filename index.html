@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>きょうのよてい</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ローディング画面 -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-text">よみこみ中…</div>
+  </div>
+
+  <!-- アプリ本体のルート。screen ごとに JS が innerHTML を差し替える -->
+  <div id="app" class="app hidden"></div>
+
+  <!-- 紙吹雪レイヤー -->
+  <div id="confetti-layer" class="confetti-layer hidden"></div>
+
+  <!-- Complete / スタンプ選択モーダル -->
+  <div id="stamp-modal" class="modal-overlay hidden">
+    <div class="modal-sheet stamp-sheet">
+      <div class="complete-title">🎉 Complete!</div>
+      <div id="cheer-message" class="cheer-message"></div>
+      <div class="stamp-prompt">きょうのスタンプをえらんでね</div>
+      <div id="stamp-grid" class="stamp-grid"></div>
+    </div>
+  </div>
+
+  <!-- 設定画面（フルスクリーン） -->
+  <div id="settings-screen" class="settings-screen hidden">
+    <div class="settings-header">
+      <div class="settings-title">せってい</div>
+      <button id="settings-close-btn" class="icon-btn" aria-label="閉じる">✕</button>
+    </div>
+    <div class="settings-tabs">
+      <button id="tab-templates-btn" class="tab-btn active" data-tab="templates">テンプレート</button>
+      <button id="tab-parent-btn" class="tab-btn" data-tab="parent">おうちの人設定</button>
+    </div>
+    <div id="settings-body" class="settings-body"></div>
+  </div>
+
+  <!-- Firebase (Firestore) : モジュール形式CDN読み込み -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>
