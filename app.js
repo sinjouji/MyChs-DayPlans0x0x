@@ -124,12 +124,26 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEFAULT_TEMPLATES = [
-  { name: "はみがき", furigana: "はみがき", maxGrade: 1, category: "do", group: "よく使う", dailyFlag: true, defaultStart: "", defaultEnd: "", order: 1 },
-  { name: "きがえ", furigana: "きがえ", maxGrade: 1, category: "do", group: "よく使う", dailyFlag: true, defaultStart: "", defaultEnd: "", order: 2 },
-  { name: "しゅくだい", furigana: "しゅくだい", maxGrade: 3, category: "do", group: "よく使う", dailyFlag: false, defaultStart: "", defaultEnd: "", order: 3 },
-  { name: "本を読む", furigana: "ほんをよむ", maxGrade: 3, category: "want", group: "よく使う", dailyFlag: false, defaultStart: "", defaultEnd: "", order: 4 },
-  { name: "おてつだい", furigana: "おてつだい", maxGrade: 4, category: "challenge", group: "チャレンジ", dailyFlag: false, defaultStart: "", defaultEnd: "", order: 5 },
+  { name: "はみがき", furigana: "はみがき", maxGrade: 1, category: "do", groups: ["よく使う"], dailyFlag: true, defaultStart: "", defaultEnd: "", order: 1 },
+  { name: "きがえ", furigana: "きがえ", maxGrade: 1, category: "do", groups: ["よく使う"], dailyFlag: true, defaultStart: "", defaultEnd: "", order: 2 },
+  { name: "しゅくだい", furigana: "しゅくだい", maxGrade: 3, category: "do", groups: ["よく使う"], dailyFlag: false, defaultStart: "", defaultEnd: "", order: 3 },
+  { name: "本を読む", furigana: "ほんをよむ", maxGrade: 3, category: "want", groups: ["よく使う"], dailyFlag: false, defaultStart: "", defaultEnd: "", order: 4 },
+  { name: "おてつだい", furigana: "おてつだい", maxGrade: 4, category: "challenge", groups: ["チャレンジ"], dailyFlag: false, defaultStart: "", defaultEnd: "", order: 5 },
 ];
+// 古いデータ（group: 文字列 単数）との互換用。groups配列があればそれを使い、なければgroup単数から補う
+function templateGroups(t) {
+  if (Array.isArray(t.groups) && t.groups.length) return t.groups;
+  if (t.group) return [t.group];
+  return [];
+}
+function allGroupNames() {
+  const set = new Set();
+  state.templates.forEach((t) => templateGroups(t).forEach((g) => { if (g) set.add(g); }));
+  const list = [...set];
+  const idx = list.indexOf("よく使う");
+  if (idx > 0) { list.splice(idx, 1); list.unshift("よく使う"); }
+  return list;
+}
 
 /* ============================================================================
    3. ユーティリティ関数
@@ -306,6 +320,7 @@ const state = {
   parentUnlocked: false,
   dragFromId: null,
   openGroups: new Set(),   // トグルで開いているテンプレートグループ名。明示的に閉じるまで開いたまま保持
+  freeAddOpen: false,      // 「＋新しく入力」フォームを表示中か
 };
 
 /* ============================================================================
@@ -421,8 +436,10 @@ function renderItemCard(item, editMode, draggable, interactive = true) {
 
 /* ---- 7-4. テンプレート入力エリア（トグル式ボタン群 + 自由入力） ---- */
 function renderTemplatePicker() {
-  const groups = ["よく使う", ...new Set(state.templates.filter((t) => t.group !== "よく使う").map((t) => t.group))]
-    .filter((g) => state.templates.some((t) => t.group === g));
+  if (state.freeAddOpen) {
+    return `<div class="input-area input-area-form">${renderFreeAddForm()}</div>`;
+  }
+  const groups = allGroupNames();
 
   const groupHtml = groups.map((g) => {
     const isOpen = state.openGroups.has(g);
@@ -432,7 +449,7 @@ function renderTemplatePicker() {
         <span>${esc(g)}</span><span data-group-arrow="${esc(g)}">${isOpen ? "▴" : "▾"}</span>
       </button>
       <div class="template-chip-row ${isOpen ? "" : "hidden"}" data-group-body="${esc(g)}">
-        ${state.templates.filter((t) => t.group === g).sort((a, b) => a.order - b.order).map((t) => `
+        ${state.templates.filter((t) => templateGroups(t).includes(g)).sort((a, b) => a.order - b.order).map((t) => `
           <button class="template-chip" style="border-color:${CATEGORY_COLOR_VAR[t.category]};" data-action="add-template" data-template-id="${t.id}">
             ${esc(t.name)}
           </button>`).join("")}
@@ -442,10 +459,8 @@ function renderTemplatePicker() {
 
   return `
     <div class="input-area">
-      ${groupHtml}
-      <div id="free-add-slot">
-        <button class="free-add-btn" data-action="open-free-add">＋ 新しく入力</button>
-      </div>
+      <div class="template-picker-groups">${groupHtml}</div>
+      <button class="template-picker-add-btn" data-action="open-free-add">＋<br>新しく<br>入力</button>
     </div>`;
 }
 
@@ -685,7 +700,7 @@ function renderTemplateSettings() {
         </select>
       </div>
       <div class="template-edit-row two-col">
-        <input type="text" value="${esc(t.group || "")}" data-tfield="group" placeholder="グループ" />
+        <input type="text" value="${esc(templateGroups(t).join("、"))}" data-tfield="groups" placeholder="グループ（複数は「、」区切り）" />
         <input type="number" value="${t.order}" data-tfield="order" placeholder="表示順" />
       </div>
       <div class="template-cat-row">
@@ -832,12 +847,14 @@ async function onAppClick(e) {
   }
 
   if (action === "open-free-add") {
-    document.getElementById("free-add-slot").innerHTML = renderFreeAddForm();
+    state.freeAddOpen = true;
     freeAddCategory = "do";
+    render();
     highlightFreeCat();
   }
   if (action === "close-free-add") {
-    document.getElementById("free-add-slot").innerHTML = `<button class="free-add-btn" data-action="open-free-add">＋ 新しく入力</button>`;
+    state.freeAddOpen = false;
+    render();
   }
   if (action === "pick-free-cat") {
     freeAddCategory = btn.dataset.cat;
@@ -850,6 +867,7 @@ async function onAppClick(e) {
     const items = currentItemsRef();
     items.push({ id: uid(), name, furigana: "", maxGrade: 6, category: freeAddCategory, start: "", end: "", memo: "", checked: false, order: items.length + 1 });
     persistDailyIfCreated();
+    state.freeAddOpen = false;
     render();
   }
 
@@ -1004,7 +1022,7 @@ async function onSettingsClick(e) {
   }
   if (action === "add-template-def") {
     const newTemplate = {
-      name: "あたらしい項目", furigana: "", maxGrade: 6, category: "do", group: "よく使う",
+      name: "あたらしい項目", furigana: "", maxGrade: 6, category: "do", groups: ["よく使う"],
       dailyFlag: false, defaultStart: "", defaultEnd: "", order: state.templates.length + 1,
     };
     const id = await fsAddTemplate(newTemplate);
@@ -1064,6 +1082,7 @@ function onSettingsInput(e) {
     let value = el.value;
     if (field === "maxGrade" || field === "order") value = Number(value);
     if (field === "dailyFlag") value = el.checked;
+    if (field === "groups") value = value.split(/[,、]/).map((s) => s.trim()).filter(Boolean);
     t[field] = value;
     clearTimeout(templateSaveTimers[id]);
     templateSaveTimers[id] = setTimeout(() => fsUpdateTemplate(id, { [field]: value }), 500);
