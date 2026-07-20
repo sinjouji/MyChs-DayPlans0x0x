@@ -136,12 +136,15 @@ function templateGroups(t) {
   if (t.group) return [t.group];
   return [];
 }
+const GROUP_PRIORITY = ["よく使う", "やること", "チャレンジ", "やりたいこと"];
 function allGroupNames() {
   const set = new Set();
   state.templates.forEach((t) => templateGroups(t).forEach((g) => { if (g) set.add(g); }));
   const list = [...set];
-  const idx = list.indexOf("よく使う");
-  if (idx > 0) { list.splice(idx, 1); list.unshift("よく使う"); }
+  list.sort((a, b) => {
+    const ra = GROUP_PRIORITY.indexOf(a); const rb = GROUP_PRIORITY.indexOf(b);
+    return (ra === -1 ? GROUP_PRIORITY.length : ra) - (rb === -1 ? GROUP_PRIORITY.length : rb);
+  });
   return list;
 }
 
@@ -488,7 +491,15 @@ function renderCreateScreen() {
   if (createDraftItems === null) {
     createDraftItems = state.templates.filter((t) => t.dailyFlag).map((t) => templateToItem(t));
   }
-  const sorted = [...createDraftItems].sort((a, b) => (a.start || "99:99").localeCompare(b.start || "99:99"));
+  const catRank = { do: 0, challenge: 1, want: 2 };
+  const sorted = [...createDraftItems].sort((a, b) => {
+    const ra = catRank[a.category] ?? 3, rb = catRank[b.category] ?? 3;
+    if (ra !== rb) return ra - rb;
+    if (a.start && b.start) return a.start.localeCompare(b.start);
+    if (a.start) return -1;
+    if (b.start) return 1;
+    return (a.order || 0) - (b.order || 0);
+  });
   const listHtml = sorted.length
     ? sorted.map((it) => renderItemCard(it, true, false)).join("")
     : `<div class="empty-hint">まだ予定がありません。下から追加してね</div>`;
