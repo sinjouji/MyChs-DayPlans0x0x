@@ -1,6 +1,6 @@
 /* ============================================================================
    きょうのよてい — app.js
-   React版から HTML / CSS / JavaScript + Firebase Firestore へ移植した版です。
+   HTML / CSS / JavaScript + Firebase Firestore 版。
    機能ごとにセクション分けし、コメントを付けています。
    ============================================================================ */
 
@@ -26,12 +26,6 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
-
-// コレクション名
-const COL_TEMPLATES = "templates";
-const COL_SETTINGS = "settings";
-const COL_DAILY_PLANS = "dailyPlans";
-const SETTINGS_DOC_ID = "app"; // settings は単一ドキュメントで管理
 
 /* ============================================================================
    2. デザイントークン・定数
@@ -88,6 +82,10 @@ function formatDateJP(dateStr) {
   const days = ["日", "月", "火", "水", "木", "金", "土"];
   return `${m}月${d}日（${days[dt.getDay()]}）`;
 }
+// YYYY-MM-DD 形式は文字列比較でそのまま前後判定できる
+function dateIsToday(d) { return d === state.today; }
+function dateIsPast(d) { return d < state.today; }
+function dateIsFuture(d) { return d > state.today; }
 
 function emptyDaily(date) {
   return { date, created: false, items: [], stamp: null, mood: null, note: "", completeShown: false };
@@ -103,26 +101,86 @@ function templateToItem(t, orderOverride) {
 }
 
 /* ============================================================================
-   4. Firestore データ層
+   4. 合言葉（パスワード）認証
+   ここで認証されるまでは他の画面は一切表示しません。
+   認証OKの合言葉はそのまま Firestore のパス（plans/{合言葉}/...）に使うので、
+   同じ合言葉を入れた端末同士だけでデータが同期されます。
    ============================================================================ */
+const AUTH_STORAGE_KEY = "kyounoyotei_auth_password";
+
+// 正解の合言葉は平文でソースに残さず、SHA-256ハッシュで比較します（ブラウザ標準のWeb Crypto APIを使用）。
+// 合言葉を決めたら、ブラウザの開発者コンソールで下のコードを実行し、
+// 出てきた文字列を CORRECT_PASSWORD_HASH に貼り付けてください。
+//   async function h(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");}
+//   h("決めた合言葉").then(console.log)
+// ※ crypto.subtle は https:// （または localhost）でのみ使えます。
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const CORRECT_PASSWORD_HASH = "bd984cda4f8f9f5cfdf1774598e28f10ef0f3249bd0e70a1a498ce5b88820267"; // ← 必ず書き換えてください
+
+let SPACE_KEY = null; // 認証後にセットされる合言葉（Firestoreパスに使用）
+
+function showPasswordScreen(withError) {
+  document.getElementById("loading-screen").classList.add("hidden");
+  document.getElementById("password-screen").classList.remove("hidden");
+  document.getElementById("password-error").classList.toggle("hidden", !withError);
+  document.getElementById("password-input").focus();
+}
+function hidePasswordScreen() {
+  document.getElementById("password-screen").classList.add("hidden");
+}
+
+async function submitPassword() {
+  const raw = document.getElementById("password-input").value.trim();
+  if (!raw) return;
+  if ((await sha256Hex(raw)) !== CORRECT_PASSWORD_HASH) { showPasswordScreen(true); return; }
+  SPACE_KEY = raw;
+  localStorage.setItem(AUTH_STORAGE_KEY, raw);
+  hidePasswordScreen();
+  await boot();
+}
+
+document.getElementById("password-submit-btn").addEventListener("click", submitPassword);
+document.getElementById("password-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPassword(); });
+
+async function initAuth() {
+  const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+  if (saved && (await sha256Hex(saved)) === CORRECT_PASSWORD_HASH) {
+    SPACE_KEY = saved;
+    await boot();
+  } else {
+    if (saved) localStorage.removeItem(AUTH_STORAGE_KEY); // 改ざん・不一致は破棄して聞き直す
+    showPasswordScreen(false);
+  }
+}
+
+/* ============================================================================
+   5. Firestore データ層
+   すべて plans/{合言葉}/... 配下に保存する（合言葉が異なれば別データ）
+   ============================================================================ */
+const templatesCol = () => collection(db, "plans", SPACE_KEY, "templates");
+const settingsDocRef = () => doc(db, "plans", SPACE_KEY, "settings", "app");
+const dailyPlansCol = () => collection(db, "plans", SPACE_KEY, "dailyPlans");
+const dailyPlanDocRef = (dateStr) => doc(db, "plans", SPACE_KEY, "dailyPlans", dateStr);
+
 async function fsGetSettings() {
-  const ref = doc(db, COL_SETTINGS, SETTINGS_DOC_ID);
-  const snap = await getDoc(ref);
+  const snap = await getDoc(settingsDocRef());
   if (snap.exists()) return { ...DEFAULT_SETTINGS, ...snap.data() };
-  await setDoc(ref, DEFAULT_SETTINGS);
+  await setDoc(settingsDocRef(), DEFAULT_SETTINGS);
   return { ...DEFAULT_SETTINGS };
 }
 async function fsSaveSettings(settings) {
-  await setDoc(doc(db, COL_SETTINGS, SETTINGS_DOC_ID), settings, { merge: true });
+  await setDoc(settingsDocRef(), settings, { merge: true });
 }
 
 async function fsGetTemplates() {
-  const snap = await getDocs(collection(db, COL_TEMPLATES));
+  const snap = await getDocs(templatesCol());
   if (snap.empty) {
-    // 初回起動時はデフォルトテンプレートを書き込む
     const created = [];
     for (const t of DEFAULT_TEMPLATES) {
-      const ref = await addDoc(collection(db, COL_TEMPLATES), t);
+      const ref = await addDoc(templatesCol(), t);
       created.push({ id: ref.id, ...t });
     }
     return created;
@@ -130,31 +188,38 @@ async function fsGetTemplates() {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 async function fsAddTemplate(template) {
-  const ref = await addDoc(collection(db, COL_TEMPLATES), template);
+  const ref = await addDoc(templatesCol(), template);
   return ref.id;
 }
 async function fsUpdateTemplate(id, patch) {
-  await updateDoc(doc(db, COL_TEMPLATES, id), patch);
+  await updateDoc(doc(db, "plans", SPACE_KEY, "templates", id), patch);
 }
 async function fsDeleteTemplate(id) {
-  await deleteDoc(doc(db, COL_TEMPLATES, id));
+  await deleteDoc(doc(db, "plans", SPACE_KEY, "templates", id));
 }
 
-async function fsGetDailyPlan(date) {
-  const snap = await getDoc(doc(db, COL_DAILY_PLANS, date));
+async function fsGetDailyPlan(dateStr) {
+  const snap = await getDoc(dailyPlanDocRef(dateStr));
   return snap.exists() ? snap.data() : null;
 }
-async function fsSaveDailyPlan(date, plan) {
-  await setDoc(doc(db, COL_DAILY_PLANS, date), plan, { merge: false });
+async function fsSaveDailyPlan(dateStr, plan) {
+  await setDoc(dailyPlanDocRef(dateStr), plan, { merge: false });
+}
+async function fsGetAllDailyPlans() {
+  const snap = await getDocs(dailyPlansCol());
+  const out = {};
+  snap.forEach((d) => { out[d.id] = d.data(); });
+  return out;
 }
 
 /* ============================================================================
-   5. アプリ状態（メモリ上のキャッシュ。Firestoreへは各アクションで書き込む）
+   6. アプリ状態（メモリ上のキャッシュ。Firestoreへは各アクションで書き込む）
    ============================================================================ */
 const state = {
   templates: [],
   settings: { ...DEFAULT_SETTINGS },
-  date: getAppDate(),
+  today: getAppDate(),     // 「アプリ上の今日」（朝4時切り替え）
+  viewDate: getAppDate(),  // 今、画面に表示している日付
   daily: null,
   yesterdayItems: null,
   editMode: false,
@@ -162,23 +227,39 @@ const state = {
   settingsTab: "templates",
   parentUnlocked: false,
   dragFromId: null,
+  openGroups: new Set(),   // トグルで開いているテンプレートグループ名。明示的に閉じるまで開いたまま保持
 };
 
 /* ============================================================================
-   6. 描画（レンダリング）関数群
+   7. 描画（レンダリング）関数群
    ============================================================================ */
 const appRoot = document.getElementById("app");
 const loadingScreen = document.getElementById("loading-screen");
 
 function render() {
   if (!state.daily) return;
-  appRoot.innerHTML = state.daily.created ? renderHomeScreen() : renderCreateScreen();
-  attachHomeOrCreateEvents();
+  let html;
+  if (dateIsPast(state.viewDate)) html = renderReadOnlyScreen();
+  else if (!state.daily.created) html = renderCreateScreen();
+  else html = renderHomeScreen();
+  appRoot.innerHTML = html;
   renderClock();
   renderSettingsPanel();
 }
 
-/* ---- 6-1. 時計（列幅の90%まで拡大表示。% 指定なのでJS側はサイズ計算不要） ---- */
+/* ---- 7-1. 日付ナビゲーション（＜ 日付 ＞） ---- */
+function renderDateNav() {
+  const badge = dateIsFuture(state.viewDate) ? `<span class="date-badge future">未来</span>`
+    : dateIsPast(state.viewDate) ? `<span class="date-badge past">過去</span>` : "";
+  return `
+    <div class="date-nav">
+      <button class="date-nav-btn" data-action="prev-date" aria-label="前の日">＜</button>
+      <span class="home-date">${formatDateJP(state.viewDate)}${badge}</span>
+      <button class="date-nav-btn" data-action="next-date" aria-label="次の日">＞</button>
+    </div>`;
+}
+
+/* ---- 7-2. 時計（右カラムに表示。文字盤つき。列幅の90%まで拡大表示） ---- */
 function renderClock() {
   const els = document.querySelectorAll("[data-clock]");
   if (!els.length) return;
@@ -189,9 +270,18 @@ function renderClock() {
   const mode = state.settings.clockMode;
   let html = "";
   if (mode === "analog" || mode === "both") {
+    const numbers = [...Array(12)].map((_, i) => {
+      const num = i === 0 ? 12 : i;
+      const angle = (i * 30 - 90) * (Math.PI / 180);
+      const radius = 37; // %
+      const x = 50 + radius * Math.cos(angle);
+      const y = 50 + radius * Math.sin(angle);
+      return `<div class="clock-number" style="left:${x}%; top:${y}%;">${num}</div>`;
+    }).join("");
     html += `
       <div class="clock-analog">
         ${[...Array(12)].map((_, i) => `<div class="clock-tick ${i % 3 === 0 ? "major" : ""}" style="transform:rotate(${i * 30}deg) translateX(-50%);"></div>`).join("")}
+        ${numbers}
         <div class="clock-hand hour" style="transform:translate(-50%,-100%) rotate(${hDeg}deg);"></div>
         <div class="clock-hand minute" style="transform:translate(-50%,-100%) rotate(${mDeg}deg);"></div>
         <div class="clock-center"></div>
@@ -204,8 +294,9 @@ function renderClock() {
 }
 setInterval(renderClock, 10000);
 
-/* ---- 6-2. 項目カード ---- */
-function renderItemCard(item, editMode, draggable) {
+/* ---- 7-3. 項目カード
+   interactive=false のときはチェック操作もできない完全な読み取り専用表示（過去ログ用） ---- */
+function renderItemCard(item, editMode, draggable, interactive = true) {
   const color = CATEGORY_COLOR_VAR[item.category];
   const timeBadge = item.start
     ? `<span class="item-time-badge">${esc(item.start)}${item.end ? `〜${esc(item.end)}` : ""}</span>` : "";
@@ -217,17 +308,24 @@ function renderItemCard(item, editMode, draggable) {
     : esc(item.name);
   const editRow = editMode ? `
     <div class="item-edit-row">
-      <input type="time" value="${esc(item.start || "")}" data-item-field="start" data-item-id="${item.id}" />
-      <input type="time" value="${esc(item.end || "")}" data-item-field="end" data-item-id="${item.id}" />
+      <div class="time-field">
+        <span class="time-field-label">開始</span>
+        <input type="time" value="${esc(item.start || "")}" data-item-field="start" data-item-id="${item.id}" />
+      </div>
+      <div class="time-field">
+        <span class="time-field-label">終了（任意）</span>
+        <input type="time" value="${esc(item.end || "")}" data-item-field="end" data-item-id="${item.id}" />
+      </div>
       <input type="text" placeholder="メモ" value="${esc(item.memo || "")}" data-item-field="memo" data-item-id="${item.id}" />
     </div>` : "";
   const deleteBtn = editMode
     ? `<button class="item-delete-btn" data-action="delete-item" data-item-id="${item.id}">✕</button>` : "";
+  const checkAction = interactive ? `data-action="toggle-item"` : "";
 
   return `
     <div class="item-card" style="border-left-color:${color};" data-item-id="${item.id}" ${draggable ? 'draggable="true"' : ""}>
-      <button class="item-check" data-action="toggle-item" data-item-id="${item.id}"
-        style="background:${item.checked ? color : "var(--surface-soft)"}; border-color:${color};">
+      <button class="item-check" ${checkAction} data-item-id="${item.id}"
+        style="background:${item.checked ? color : "var(--surface-soft)"}; border-color:${color}; ${interactive ? "" : "cursor:default;"}">
         ${item.checked ? "✓" : ""}
       </button>
       <div class="item-body">
@@ -242,23 +340,26 @@ function renderItemCard(item, editMode, draggable) {
     </div>`;
 }
 
-/* ---- 6-3. テンプレート入力エリア（トグル式ボタン群 + 自由入力） ---- */
+/* ---- 7-4. テンプレート入力エリア（トグル式ボタン群 + 自由入力） ---- */
 function renderTemplatePicker() {
   const groups = ["よく使う", ...new Set(state.templates.filter((t) => t.group !== "よく使う").map((t) => t.group))]
     .filter((g) => state.templates.some((t) => t.group === g));
 
-  const groupHtml = groups.map((g) => `
+  const groupHtml = groups.map((g) => {
+    const isOpen = state.openGroups.has(g);
+    return `
     <div class="template-group">
       <button class="template-group-header" data-action="toggle-group" data-group="${esc(g)}">
-        <span>${esc(g)}</span><span data-group-arrow="${esc(g)}">▾</span>
+        <span>${esc(g)}</span><span data-group-arrow="${esc(g)}">${isOpen ? "▴" : "▾"}</span>
       </button>
-      <div class="template-chip-row hidden" data-group-body="${esc(g)}">
+      <div class="template-chip-row ${isOpen ? "" : "hidden"}" data-group-body="${esc(g)}">
         ${state.templates.filter((t) => t.group === g).sort((a, b) => a.order - b.order).map((t) => `
           <button class="template-chip" style="border-color:${CATEGORY_COLOR_VAR[t.category]};" data-action="add-template" data-template-id="${t.id}">
             ${esc(t.name)}
           </button>`).join("")}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 
   return `
     <div class="input-area">
@@ -286,7 +387,7 @@ function renderFreeAddForm() {
 }
 let freeAddCategory = "do";
 
-/* ---- 6-4. 「今日の予定を作る」画面 ---- */
+/* ---- 7-5. 「予定を作る」画面（今日／未来日どちらも使う） ---- */
 let createDraftItems = null; // この画面内だけで使う一時的な下書き
 
 function renderCreateScreen() {
@@ -298,13 +399,14 @@ function renderCreateScreen() {
     ? sorted.map((it) => renderItemCard(it, true, false)).join("")
     : `<div class="empty-hint">まだ予定がありません。下から追加してね</div>`;
   const copyBtn = state.yesterdayItems && state.yesterdayItems.length
-    ? `<button class="copy-yesterday-btn" data-action="copy-yesterday">きのうの予定をコピーする</button>` : "";
+    ? `<button class="copy-yesterday-btn" data-action="copy-yesterday">前日の予定をコピーする</button>` : "";
+  const titleLabel = dateIsToday(state.viewDate) ? "今日の予定を作る" : `${formatDateJP(state.viewDate)}の予定を作る`;
 
   return `
     <div class="create-screen">
       <div class="create-header">
-        <div class="subtitle">今日の予定を作る</div>
-        <div class="date">${formatDateJP(state.date)}</div>
+        ${renderDateNav()}
+        <div class="subtitle" style="margin-top:10px;">${titleLabel}</div>
       </div>
       <div class="create-list" id="create-list">${listHtml}${copyBtn}</div>
       ${renderTemplatePicker()}
@@ -314,9 +416,9 @@ function renderCreateScreen() {
     </div>`;
 }
 
-/* ---- 6-5. ホーム画面（閲覧／編集モード）：2カラム表示
-   左カラム = やること・時間設定がある項目 + 大きな時計
-   右カラム = チャレンジ・やりたいこと（時間指定なし想定）
+/* ---- 7-6. ホーム画面（閲覧／編集モード）：2カラム表示
+   左カラム = やること・時間設定がある項目
+   右カラム = 時計（大きく表示）+ チャレンジ・やりたいこと
 ---- */
 function splitColumns(visibleItems) {
   const leftAll = visibleItems.filter((it) => it.category === "do" || it.start);
@@ -351,18 +453,18 @@ function renderHomeScreen() {
   return `
     <div class="home-header">
       <div>
-        <div class="home-date">${formatDateJP(state.date)}</div>
+        ${renderDateNav()}
         <div class="home-title">きょうのよてい</div>
         ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
       </div>
     </div>
     <div class="item-list ${state.editMode ? "editing" : ""}">
       <div class="home-col home-col-left">
-        <div data-clock></div>
         <div class="home-col-title">やること</div>
         ${leftHtml}
       </div>
       <div class="home-col home-col-right">
+        <div data-clock></div>
         <div class="home-col-title">チャレンジ・やりたいこと</div>
         ${rightHtml}
       </div>
@@ -370,7 +472,46 @@ function renderHomeScreen() {
     ${bottom}`;
 }
 
-/* ---- 6-6. Complete演出 / スタンプ選択モーダル ---- */
+/* ---- 7-7. 過去ログ（読み取り専用） ---- */
+function renderReadOnlyScreen() {
+  if (!state.daily.created) {
+    return `
+      <div class="home-header"><div>${renderDateNav()}<div class="home-title">きろく</div></div></div>
+      <div class="item-list"><div class="empty-hint">この日の記録はありません</div></div>`;
+  }
+  const doItems = state.daily.items.filter((it) => it.category === "do");
+  const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
+  const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
+  const { leftTimed, leftUntimed, rightSorted } = splitColumns(visibleItems);
+  const leftHtml = (leftTimed.length + leftUntimed.length) === 0
+    ? `<div class="empty-hint">記録なし</div>`
+    : leftTimed.concat(leftUntimed).map((it) => renderItemCard(it, false, false, false)).join("");
+  const rightHtml = rightSorted.length === 0
+    ? `<div class="empty-hint">記録なし</div>`
+    : rightSorted.map((it) => renderItemCard(it, false, false, false)).join("");
+
+  return `
+    <div class="home-header">
+      <div>
+        ${renderDateNav()}
+        <div class="home-title">きろく</div>
+        ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
+      </div>
+    </div>
+    <div class="readonly-hint">過去の記録です（編集はできません）</div>
+    <div class="item-list">
+      <div class="home-col home-col-left">
+        <div class="home-col-title">やること</div>
+        ${leftHtml}
+      </div>
+      <div class="home-col home-col-right">
+        <div class="home-col-title">チャレンジ・やりたいこと</div>
+        ${rightHtml}
+      </div>
+    </div>`;
+}
+
+/* ---- 7-8. Complete演出 / スタンプ選択モーダル ---- */
 function showConfettiAndComplete() {
   const layer = document.getElementById("confetti-layer");
   layer.classList.remove("hidden");
@@ -405,7 +546,19 @@ function openStampModal() {
   document.getElementById("stamp-modal").classList.remove("hidden");
 }
 
-/* ---- 6-7. 設定画面（テンプレート／おうちの人設定） ---- */
+// スタンプモーダルは #app の外にある独立した要素なので、専用のリスナーを一度だけ登録する
+// （以前はここが appRoot にしか付いていなかったため、選択してもモーダルが閉じないバグがあった）
+document.getElementById("stamp-modal").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action='pick-stamp']");
+  if (!btn) return;
+  state.daily.stamp = btn.dataset.stamp;
+  state.daily.completeShown = true;
+  await fsSaveDailyPlan(state.viewDate, state.daily);
+  document.getElementById("stamp-modal").classList.add("hidden");
+  render();
+});
+
+/* ---- 7-9. 設定画面（テンプレート／おうちの人設定） ---- */
 function renderSettingsPanel() {
   const panel = document.getElementById("settings-screen");
   panel.classList.toggle("hidden", !state.showSettings);
@@ -416,7 +569,6 @@ function renderSettingsPanel() {
 
   const body = document.getElementById("settings-body");
   body.innerHTML = state.settingsTab === "templates" ? renderTemplateSettings() : renderParentSettings();
-  attachSettingsEvents();
 }
 
 function renderTemplateSettings() {
@@ -493,34 +645,50 @@ function renderParentSettings() {
     <div class="parent-section">
       <div class="parent-section-title">パスコード変更</div>
       <input type="text" id="setting-passcode" value="${esc(s.passcode)}" />
+    </div>
+    <div class="parent-section">
+      <div class="parent-section-title">データのバックアップ</div>
+      <div class="data-io-row">
+        <button class="data-io-btn" data-action="export-data">JSONエクスポート</button>
+        <button class="data-io-btn" data-action="import-data">JSONインポート</button>
+      </div>
+      <div class="data-io-hint">端末にJSONファイルとして保存／読み込みできます（インポートは現在のデータを上書きします）</div>
+    </div>
+    <div class="parent-section">
+      <button class="logout-btn" data-action="change-space">合言葉を入力しなおす</button>
     </div>`;
 }
 
 /* ============================================================================
-   7. イベントハンドラ / アクション関数
+   8. イベントハンドラ / アクション関数
+   appRoot・settings-body へのイベント登録は init() で一度だけ行う
+   （毎回 render() のたびに addEventListener すると多重発火するため）
    ============================================================================ */
-
-/* ---- 7-1. ホーム／作成画面 共通：委譲イベント ---- */
-function attachHomeOrCreateEvents() {
-  appRoot.addEventListener("click", onAppClick);
-  appRoot.addEventListener("input", onAppInput);
-  appRoot.addEventListener("dragstart", onDragStart);
-  appRoot.addEventListener("dragover", onDragOver);
-  appRoot.addEventListener("drop", onDrop);
-}
-
 function currentItemsRef() {
-  // 作成前画面なら下書き配列、作成後ならデイリープランの items を返す
   return state.daily.created ? state.daily.items : createDraftItems;
 }
 function persistDailyIfCreated() {
-  if (state.daily.created) fsSaveDailyPlan(state.date, state.daily);
+  if (state.daily.created) fsSaveDailyPlan(state.viewDate, state.daily);
+}
+
+async function loadViewDate(dateStr) {
+  state.viewDate = dateStr;
+  state.editMode = false;
+  createDraftItems = null;
+  const plan = await fsGetDailyPlan(dateStr);
+  state.daily = plan || emptyDaily(dateStr);
+  const y = await fsGetDailyPlan(shiftDate(dateStr, -1));
+  state.yesterdayItems = y && y.items ? y.items : null;
+  render();
 }
 
 async function onAppClick(e) {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
   const action = btn.dataset.action;
+
+  if (action === "prev-date") { await loadViewDate(shiftDate(state.viewDate, -1)); return; }
+  if (action === "next-date") { await loadViewDate(shiftDate(state.viewDate, 1)); return; }
 
   if (action === "toggle-item") {
     const items = currentItemsRef();
@@ -543,13 +711,12 @@ async function onAppClick(e) {
 
   if (action === "toggle-group") {
     const g = btn.dataset.group;
+    if (state.openGroups.has(g)) state.openGroups.delete(g); else state.openGroups.add(g);
+    // 全体re-renderせず該当グループだけ切り替える（入力中のフォーム等を消さないため）
     const body = document.querySelector(`[data-group-body="${CSS.escape(g)}"]`);
     const arrow = document.querySelector(`[data-group-arrow="${CSS.escape(g)}"]`);
-    if (body) {
-      const willOpen = body.classList.contains("hidden");
-      body.classList.toggle("hidden");
-      if (arrow) arrow.textContent = willOpen ? "▴" : "▾";
-    }
+    if (body) body.classList.toggle("hidden", !state.openGroups.has(g));
+    if (arrow) arrow.textContent = state.openGroups.has(g) ? "▴" : "▾";
   }
 
   if (action === "add-template") {
@@ -591,23 +758,13 @@ async function onAppClick(e) {
   if (action === "confirm-create") {
     const withOrder = createDraftItems.map((it, i) => ({ ...it, order: i + 1 }));
     state.daily = { ...state.daily, created: true, items: withOrder };
-    await fsSaveDailyPlan(state.date, state.daily);
+    await fsSaveDailyPlan(state.viewDate, state.daily);
     createDraftItems = null;
     render();
   }
 
   if (action === "start-edit") { state.editMode = true; render(); }
   if (action === "finish-edit") { state.editMode = false; render(); }
-
-  if (action === "open-settings") { state.showSettings = true; renderSettingsPanel(); }
-
-  if (action === "pick-stamp") {
-    state.daily.stamp = btn.dataset.stamp;
-    state.daily.completeShown = true;
-    await fsSaveDailyPlan(state.date, state.daily);
-    document.getElementById("stamp-modal").classList.add("hidden");
-    render();
-  }
 }
 
 function highlightFreeCat() {
@@ -628,7 +785,7 @@ function onAppInput(e) {
   persistDailyIfCreated();
 }
 
-/* ---- 7-2. 時間なし項目のドラッグ並び替え ---- */
+/* ---- 8-1. 時間なし項目のドラッグ並び替え（左右カラムをまたがない） ---- */
 function onDragStart(e) {
   const card = e.target.closest(".item-card[draggable='true']");
   if (!card) return;
@@ -639,7 +796,6 @@ function onDragOver(e) {
   if (card) e.preventDefault();
 }
 function itemColumnGroup(it) {
-  // 左カラム = やること（時間なし）／ 右カラム = チャレンジ・やりたいこと
   return it.category === "do" ? "left" : "right";
 }
 function onDrop(e) {
@@ -673,23 +829,17 @@ function onDrop(e) {
   render();
 }
 
-/* ---- 7-3. Complete判定（「やること」が全てチェックされたか） ---- */
+/* ---- 8-2. Complete判定（今日のぶんの「やること」が全てチェックされたか） ---- */
 function checkCompletion() {
   if (!state.daily.created || state.daily.completeShown) return;
+  if (!dateIsToday(state.viewDate)) return; // 演出は「今日」のみ
   const doItems = state.daily.items.filter((it) => it.category === "do");
   if (doItems.length > 0 && doItems.every((it) => it.checked)) {
     showConfettiAndComplete();
   }
 }
 
-/* ---- 7-4. 設定画面のイベント ---- */
-function attachSettingsEvents() {
-  const body = document.getElementById("settings-body");
-  body.onclick = onSettingsClick;
-  body.oninput = onSettingsInput;
-  body.onchange = onSettingsChange;
-}
-
+/* ---- 8-3. 設定画面のイベント ---- */
 async function onSettingsClick(e) {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
@@ -735,6 +885,24 @@ async function onSettingsClick(e) {
     const text = document.getElementById("setting-cheerMessages").value;
     state.settings.cheerMessages = text.split("\n").map((s) => s.trim()).filter(Boolean);
     await fsSaveSettings(state.settings);
+  }
+  if (action === "export-data") {
+    btn.disabled = true;
+    await exportAllData();
+    btn.disabled = false;
+  }
+  if (action === "import-data") {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "application/json";
+    inp.onchange = () => { if (inp.files[0]) importAllData(inp.files[0]); };
+    inp.click();
+  }
+  if (action === "change-space") {
+    if (confirm("合言葉の入力からやり直します。よろしいですか？")) {
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      location.reload();
+    }
   }
 }
 
@@ -784,6 +952,72 @@ async function onSettingsChange(e) {
   }
 }
 
+/* ============================================================================
+   9. データのエクスポート／インポート（JSONバックアップ）
+   ============================================================================ */
+async function exportAllData() {
+  const dailyPlans = await fsGetAllDailyPlans();
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    settings: state.settings,
+    templates: state.templates,
+    dailyPlans,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `kyounoyotei-backup-${state.today}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importAllData(file) {
+  let payload;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch (err) {
+    alert("JSONファイルの読み込みに失敗しました");
+    return;
+  }
+  if (!confirm("現在のデータを上書きしてインポートします。よろしいですか？")) return;
+
+  if (payload.settings) {
+    state.settings = { ...DEFAULT_SETTINGS, ...payload.settings };
+    await fsSaveSettings(state.settings);
+  }
+  if (Array.isArray(payload.templates)) {
+    const existing = await getDocs(templatesCol());
+    for (const d of existing.docs) await deleteDoc(d.ref);
+    const newTemplates = [];
+    for (const t of payload.templates) {
+      const { id, ...rest } = t;
+      const ref = await addDoc(templatesCol(), rest);
+      newTemplates.push({ id: ref.id, ...rest });
+    }
+    state.templates = newTemplates;
+  }
+  if (payload.dailyPlans) {
+    for (const [dateStr, plan] of Object.entries(payload.dailyPlans)) {
+      await setDoc(dailyPlanDocRef(dateStr), plan);
+    }
+  }
+  alert("インポートが完了しました");
+  await loadViewDate(state.viewDate);
+  renderSettingsPanel();
+}
+
+/* ============================================================================
+   10. 初期化
+   ============================================================================ */
+document.getElementById("home-nav-btn").addEventListener("click", async () => {
+  state.showSettings = false;
+  renderSettingsPanel();
+  if (state.viewDate !== state.today) await loadViewDate(state.today);
+  else { state.editMode = false; render(); }
+});
 document.getElementById("global-settings-btn").addEventListener("click", () => {
   state.showSettings = true;
   renderSettingsPanel();
@@ -795,31 +1029,42 @@ document.getElementById("settings-close-btn").addEventListener("click", () => {
 document.getElementById("tab-templates-btn").addEventListener("click", () => { state.settingsTab = "templates"; renderSettingsPanel(); });
 document.getElementById("tab-parent-btn").addEventListener("click", () => { state.settingsTab = "parent"; renderSettingsPanel(); });
 
-/* ============================================================================
-   8. 初期化
-   ============================================================================ */
-async function init() {
+// #app と #settings-body へのイベント登録は一度だけ（render() のたびに登録すると多重発火する）
+appRoot.addEventListener("click", onAppClick);
+appRoot.addEventListener("input", onAppInput);
+appRoot.addEventListener("dragstart", onDragStart);
+appRoot.addEventListener("dragover", onDragOver);
+appRoot.addEventListener("drop", onDrop);
+const settingsBody = document.getElementById("settings-body");
+settingsBody.addEventListener("click", onSettingsClick);
+settingsBody.addEventListener("input", onSettingsInput);
+settingsBody.addEventListener("change", onSettingsChange);
+
+async function boot() {
   state.settings = await fsGetSettings();
   state.templates = await fsGetTemplates();
 
-  const today = getAppDate();
-  state.date = today;
-  const daily = await fsGetDailyPlan(today);
-  state.daily = daily || emptyDaily(today);
-
-  const yesterday = await fsGetDailyPlan(shiftDate(today, -1));
+  state.today = getAppDate();
+  state.viewDate = state.today;
+  const daily = await fsGetDailyPlan(state.today);
+  state.daily = daily || emptyDaily(state.today);
+  const yesterday = await fsGetDailyPlan(shiftDate(state.today, -1));
   state.yesterdayItems = yesterday && yesterday.items ? yesterday.items : null;
 
   loadingScreen.classList.add("hidden");
   appRoot.classList.remove("hidden");
-  document.getElementById("global-settings-btn").classList.remove("hidden");
+  document.getElementById("top-right-nav").classList.remove("hidden");
   render();
 
-  // 日付が4時をまたいだら自動でチェック（1分ごと）
+  // 日付が4時をまたいだら「今日」を再計算（表示中の過去日ブラウズは邪魔しない）
   setInterval(() => {
-    const now = getAppDate();
-    if (now !== state.date) location.reload();
+    const nowToday = getAppDate();
+    if (nowToday !== state.today) {
+      const wasOnToday = state.viewDate === state.today;
+      state.today = nowToday;
+      if (wasOnToday) loadViewDate(nowToday);
+    }
   }, 60000);
 }
 
-init();
+initAuth();

@@ -15,11 +15,25 @@
     <div class="loading-text">よみこみ中…</div>
   </div>
 
+  <!-- 合言葉（パスワード）入力画面。認証されるまではこれだけを表示する -->
+  <div id="password-screen" class="password-screen hidden">
+    <div class="password-card">
+      <div class="password-title">きょうのよてい</div>
+      <div class="password-hint">おうちの合言葉を入力してください</div>
+      <input type="password" id="password-input" class="password-input" autocomplete="off" />
+      <div id="password-error" class="password-error hidden">合言葉が違います</div>
+      <button id="password-submit-btn" class="password-submit-btn">はじめる</button>
+    </div>
+  </div>
+
   <!-- アプリ本体のルート。screen ごとに JS が innerHTML を差し替える -->
   <div id="app" class="app hidden"></div>
 
-  <!-- 設定への入り口。デイリー計画作成前でも常にアクセスできるよう画面全体に固定表示 -->
-  <button id="global-settings-btn" class="global-settings-btn hidden" aria-label="せってい">⚙️</button>
+  <!-- 常時表示のナビゲーション（ホームへ戻る／設定） -->
+  <div id="top-right-nav" class="top-right-nav hidden">
+    <button id="home-nav-btn" class="nav-icon-btn" aria-label="ホームに戻る">🏠</button>
+    <button id="global-settings-btn" class="nav-icon-btn" aria-label="せってい">⚙️</button>
+  </div>
 
   <!-- 紙吹雪レイヤー -->
   <div id="confetti-layer" class="confetti-layer hidden"></div>
