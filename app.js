@@ -432,7 +432,10 @@ function splitColumns(visibleItems) {
 function renderHomeScreen() {
   const doItems = state.daily.items.filter((it) => it.category === "do");
   const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
-  const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
+  // 編集モード中はチャレンジ項目も常に見えるようにする（閲覧モードのみ「やること」完了まで隠す）
+  const visibleItems = state.editMode
+    ? state.daily.items
+    : state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
   const { leftTimed, leftUntimed, rightSorted } = splitColumns(visibleItems);
 
   const leftHtml = (leftTimed.length + leftUntimed.length) === 0
@@ -440,7 +443,7 @@ function renderHomeScreen() {
     : leftTimed.map((it) => renderItemCard(it, state.editMode, false)).join("")
       + leftUntimed.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("");
 
-  const challengeHint = state.settings.challengeEnabled && !challengeUnlocked && state.daily.items.some((it) => it.category === "challenge")
+  const challengeHint = !state.editMode && state.settings.challengeEnabled && !challengeUnlocked && state.daily.items.some((it) => it.category === "challenge")
     ? `<div class="challenge-hint">「やること」が終わったら チャレンジ が出てくるよ</div>` : "";
   const rightHtml = (rightSorted.length === 0 && !challengeHint)
     ? `<div class="empty-hint">予定なし</div>`
