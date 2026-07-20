@@ -15,14 +15,14 @@ import {
    ※ ご自身の Firebase プロジェクトの設定値に書き換えてください。
    Firebaseコンソール → プロジェクトの設定 → マイアプリ から取得できます。
    ============================================================================ */
-  const firebaseConfig = {
-    apiKey: "AIzaSyDBj4SmdltBms4tNnoagrz8U3WhC0upq4c",
-    authDomain: "mychs-dayplans0x0x.firebaseapp.com",
-    projectId: "mychs-dayplans0x0x",
-    storageBucket: "mychs-dayplans0x0x.firebasestorage.app",
-    messagingSenderId: "452128702920",
-    appId: "1:452128702920:web:a80fbf0cf3ef5f03e280fd"
-  };
+const firebaseConfig = {
+  apiKey: "AIzaSyDBj4SmdltBms4tNnoagrz8U3WhC0upq4c",
+  authDomain: "mychs-dayplans0x0x.firebaseapp.com",
+  projectId: "mychs-dayplans0x0x",
+  storageBucket: "mychs-dayplans0x0x.firebasestorage.app",
+  messagingSenderId: "452128702920",
+  appId: "1:452128702920:web:4624da7a3c9cf742e280fd"
+};
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
