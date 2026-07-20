@@ -178,7 +178,7 @@ function render() {
   renderSettingsPanel();
 }
 
-/* ---- 6-1. 時計 ---- */
+/* ---- 6-1. 時計（列幅の90%まで拡大表示。% 指定なのでJS側はサイズ計算不要） ---- */
 function renderClock() {
   const els = document.querySelectorAll("[data-clock]");
   if (!els.length) return;
@@ -187,22 +187,20 @@ function renderClock() {
   const hDeg = (h % 12) * 30 + m * 0.5;
   const mDeg = m * 6;
   const mode = state.settings.clockMode;
-  els.forEach((el) => {
-    let html = "";
-    if (mode === "analog" || mode === "both") {
-      html += `
-        <div class="clock-analog">
-          ${[...Array(12)].map((_, i) => `<div class="clock-tick" style="height:${i % 3 === 0 ? 6 : 3}px; transform:rotate(${i * 30}deg) translateX(-50%);"></div>`).join("")}
-          <div class="clock-hand hour" style="transform:translate(-50%,-100%) rotate(${hDeg}deg);"></div>
-          <div class="clock-hand minute" style="transform:translate(-50%,-100%) rotate(${mDeg}deg);"></div>
-          <div class="clock-center"></div>
-        </div>`;
-    }
-    if (mode === "digital" || mode === "both") {
-      html += `<div class="clock-digital">${pad(h)}:${pad(m)}</div>`;
-    }
-    el.innerHTML = `<div class="clock-wrap">${html}</div>`;
-  });
+  let html = "";
+  if (mode === "analog" || mode === "both") {
+    html += `
+      <div class="clock-analog">
+        ${[...Array(12)].map((_, i) => `<div class="clock-tick ${i % 3 === 0 ? "major" : ""}" style="transform:rotate(${i * 30}deg) translateX(-50%);"></div>`).join("")}
+        <div class="clock-hand hour" style="transform:translate(-50%,-100%) rotate(${hDeg}deg);"></div>
+        <div class="clock-hand minute" style="transform:translate(-50%,-100%) rotate(${mDeg}deg);"></div>
+        <div class="clock-center"></div>
+      </div>`;
+  }
+  if (mode === "digital" || mode === "both") {
+    html += `<div class="clock-digital">${pad(h)}:${pad(m)}</div>`;
+  }
+  els.forEach((el) => { el.innerHTML = `<div class="clock-wrap">${html}</div>`; });
 }
 setInterval(renderClock, 10000);
 
@@ -304,7 +302,6 @@ function renderCreateScreen() {
 
   return `
     <div class="create-screen">
-      <div data-clock style="display:none;"></div>
       <div class="create-header">
         <div class="subtitle">今日の予定を作る</div>
         <div class="date">${formatDateJP(state.date)}</div>
@@ -317,21 +314,35 @@ function renderCreateScreen() {
     </div>`;
 }
 
-/* ---- 6-5. ホーム画面（閲覧／編集モード） ---- */
+/* ---- 6-5. ホーム画面（閲覧／編集モード）：2カラム表示
+   左カラム = やること・時間設定がある項目 + 大きな時計
+   右カラム = チャレンジ・やりたいこと（時間指定なし想定）
+---- */
+function splitColumns(visibleItems) {
+  const leftAll = visibleItems.filter((it) => it.category === "do" || it.start);
+  const rightAll = visibleItems.filter((it) => !(it.category === "do" || it.start));
+  const leftTimed = leftAll.filter((it) => it.start).sort((a, b) => a.start.localeCompare(b.start));
+  const leftUntimed = leftAll.filter((it) => !it.start).sort((a, b) => a.order - b.order);
+  const rightSorted = [...rightAll].sort((a, b) => a.order - b.order);
+  return { leftTimed, leftUntimed, rightSorted };
+}
+
 function renderHomeScreen() {
   const doItems = state.daily.items.filter((it) => it.category === "do");
   const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
   const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
-  const timed = visibleItems.filter((it) => it.start).sort((a, b) => a.start.localeCompare(b.start));
-  const untimed = visibleItems.filter((it) => !it.start).sort((a, b) => a.order - b.order);
+  const { leftTimed, leftUntimed, rightSorted } = splitColumns(visibleItems);
 
-  const listHtml = visibleItems.length
-    ? timed.map((it) => renderItemCard(it, state.editMode, false)).join("")
-      + untimed.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
-    : `<div class="empty-hint">まだ予定がありません</div>`;
+  const leftHtml = (leftTimed.length + leftUntimed.length) === 0
+    ? `<div class="empty-hint">予定なし</div>`
+    : leftTimed.map((it) => renderItemCard(it, state.editMode, false)).join("")
+      + leftUntimed.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("");
 
   const challengeHint = state.settings.challengeEnabled && !challengeUnlocked && state.daily.items.some((it) => it.category === "challenge")
     ? `<div class="challenge-hint">「やること」が終わったら チャレンジ が出てくるよ</div>` : "";
+  const rightHtml = (rightSorted.length === 0 && !challengeHint)
+    ? `<div class="empty-hint">予定なし</div>`
+    : rightSorted.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("") + challengeHint;
 
   const bottom = state.editMode
     ? `${renderTemplatePicker()}<div class="bottom-bar"><button class="edit-done-btn" data-action="finish-edit">編集をおわる</button></div>`
@@ -344,13 +355,17 @@ function renderHomeScreen() {
         <div class="home-title">きょうのよてい</div>
         ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
       </div>
-      <div class="header-right">
-        <div data-clock></div>
-        <button class="icon-btn" data-action="open-settings">⚙️</button>
-      </div>
     </div>
     <div class="item-list ${state.editMode ? "editing" : ""}">
-      ${listHtml}${challengeHint}
+      <div class="home-col home-col-left">
+        <div data-clock></div>
+        <div class="home-col-title">やること</div>
+        ${leftHtml}
+      </div>
+      <div class="home-col home-col-right">
+        <div class="home-col-title">チャレンジ・やりたいこと</div>
+        ${rightHtml}
+      </div>
     </div>
     ${bottom}`;
 }
@@ -623,6 +638,10 @@ function onDragOver(e) {
   const card = e.target.closest(".item-card[draggable='true']");
   if (card) e.preventDefault();
 }
+function itemColumnGroup(it) {
+  // 左カラム = やること（時間なし）／ 右カラム = チャレンジ・やりたいこと
+  return it.category === "do" ? "left" : "right";
+}
 function onDrop(e) {
   const card = e.target.closest(".item-card[draggable='true']");
   if (!card || !state.dragFromId) return;
@@ -631,11 +650,18 @@ function onDrop(e) {
   if (toId === state.dragFromId) return;
 
   const items = state.daily.items;
-  const untimedIds = items.filter((it) => !it.start).sort((a, b) => a.order - b.order).map((it) => it.id);
-  const fromIdx = untimedIds.indexOf(state.dragFromId);
-  const toIdx = untimedIds.indexOf(toId);
-  if (fromIdx === -1 || toIdx === -1) return;
-  const reordered = [...untimedIds];
+  const fromItem = items.find((it) => it.id === state.dragFromId);
+  const toItem = items.find((it) => it.id === toId);
+  if (!fromItem || !toItem || itemColumnGroup(fromItem) !== itemColumnGroup(toItem)) { state.dragFromId = null; return; }
+
+  const groupIds = items
+    .filter((it) => !it.start && itemColumnGroup(it) === itemColumnGroup(fromItem))
+    .sort((a, b) => a.order - b.order)
+    .map((it) => it.id);
+  const fromIdx = groupIds.indexOf(state.dragFromId);
+  const toIdx = groupIds.indexOf(toId);
+  if (fromIdx === -1 || toIdx === -1) { state.dragFromId = null; return; }
+  const reordered = [...groupIds];
   const [moved] = reordered.splice(fromIdx, 1);
   reordered.splice(toIdx, 0, moved);
   reordered.forEach((id, idx) => {
@@ -758,6 +784,10 @@ async function onSettingsChange(e) {
   }
 }
 
+document.getElementById("global-settings-btn").addEventListener("click", () => {
+  state.showSettings = true;
+  renderSettingsPanel();
+});
 document.getElementById("settings-close-btn").addEventListener("click", () => {
   state.showSettings = false;
   renderSettingsPanel();
@@ -782,6 +812,7 @@ async function init() {
 
   loadingScreen.classList.add("hidden");
   appRoot.classList.remove("hidden");
+  document.getElementById("global-settings-btn").classList.remove("hidden");
   render();
 
   // 日付が4時をまたいだら自動でチェック（1分ごと）
