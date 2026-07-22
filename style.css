@@ -105,6 +105,70 @@ input, select, textarea {
 .home-title { font-size: 22px; font-weight: 800; color: var(--ink); }
 .home-stamp { font-size: 24px; margin-top: 4px; }
 
+/* ---- ヘッダーの電光掲示板メッセージ ---- */
+.header-ticker {
+  flex: 1;
+  align-self: center;
+  height: 40px;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  margin: 0 10px;
+  background: var(--surface);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+}
+.header-ticker-track {
+  position: absolute;
+  top: 50%;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  animation-name: header-ticker-scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes header-ticker-scroll {
+  from { transform: translate(100vw, -50%); }
+  to { transform: translate(-120vw, -50%); }
+}
+
+/* ---- 「きょうをはじめる」画面 ---- */
+.start-today-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 0 24px;
+  text-align: center;
+}
+.start-today-message { font-size: 18px; font-weight: 700; color: var(--ink); line-height: 1.6; }
+.start-today-btn {
+  padding: 18px 40px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 18px;
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* ---- 過去ログのおかあさんチェック表示 ---- */
+.mom-check-readonly {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.mom-checked-badge { margin-top: 6px; font-weight: 800; color: var(--accent-deep); }
+
 /* ---- 常時表示のナビゲーション（ホーム／設定） ---- */
 .top-right-nav {
   position: fixed;
@@ -510,3 +574,14 @@ input, select, textarea {
 /* ---- 項目カードの開始／終了時間入力ラベル ---- */
 .time-field { display: flex; flex-direction: column; gap: 2px; }
 .time-field-label { font-size: 10px; font-weight: 700; color: var(--ink-soft); padding-left: 2px; }
+.time-field-row { display: flex; align-items: center; gap: 4px; }
+.time-clear-btn {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--ink-soft);
+  font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line);
+}

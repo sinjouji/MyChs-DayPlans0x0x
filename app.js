@@ -9,21 +9,12 @@ import {
   getFirestore, doc, getDoc, setDoc, collection, getDocs,
   addDoc, updateDoc, deleteDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { firebaseConfig, CORRECT_PASSWORD_HASH } from "./config.js";
 
 /* ============================================================================
    1. Firebase 初期化
-   ※ ご自身の Firebase プロジェクトの設定値に書き換えてください。
-   Firebaseコンソール → プロジェクトの設定 → マイアプリ から取得できます。
+   ※ 接続情報の書き換えは config.js で行ってください（このファイルは触らなくてOK）。
    ============================================================================ */
-const firebaseConfig = {
-  apiKey: "AIzaSyDBj4SmdltBms4tNnoagrz8U3WhC0upq4c",
-  authDomain: "mychs-dayplans0x0x.firebaseapp.com",
-  projectId: "mychs-dayplans0x0x",
-  storageBucket: "mychs-dayplans0x0x.firebasestorage.app",
-  messagingSenderId: "452128702920",
-  appId: "1:452128702920:web:4624da7a3c9cf742e280fd"
-};
-
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
@@ -114,6 +105,8 @@ const DEFAULT_SETTINGS = {
   challengeEnabled: true,
   passcode: "0000",
   childGrade: 1,
+  tickerEnabled: false,    // ヘッダーの電光掲示板メッセージ表示ON/OFF
+  tickerMessage: "",       // ヘッダーの電光掲示板メッセージ内容
   cheerMessages: [
     "今日もよくがんばったね",
     "今日はいっぱい遊ぼう♪",
@@ -179,7 +172,7 @@ function dateIsFuture(d) { return d > state.today; }
 
 function emptyDaily(date) {
   return {
-    date, created: false, items: [], mood: null, note: "",
+    date, created: false, started: false, items: [], mood: null, note: "",
     stamp: null, completeShown: false,               // 「やること」完了のスタンプ
     challengeStamp: null, challengeCompleteShown: false, // 「チャレンジ」完了のスタンプ（初回のみ）
     parentNote: "", parentChecked: false,             // おかあさんチェック
@@ -204,16 +197,11 @@ function templateToItem(t, orderOverride) {
 const AUTH_STORAGE_KEY = "kyounoyotei_auth_password";
 
 // 正解の合言葉は平文でソースに残さず、SHA-256ハッシュで比較します（ブラウザ標準のWeb Crypto APIを使用）。
-// 合言葉を決めたら、ブラウザの開発者コンソールで下のコードを実行し、
-// 出てきた文字列を CORRECT_PASSWORD_HASH に貼り付けてください。
-//   async function h(s){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");}
-//   h("決めた合言葉").then(console.log)
-// ※ crypto.subtle は https:// （または localhost）でのみ使えます。
+// 合言葉の設定・変更は config.js の CORRECT_PASSWORD_HASH で行ってください。
 async function sha256Hex(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-const CORRECT_PASSWORD_HASH = "bd984cda4f8f9f5cfdf1774598e28f10ef0f3249bd0e70a1a498ce5b88820267"; // ← 必ず書き換えてください
 
 let SPACE_KEY = null; // 認証後にセットされる合言葉（Firestoreパスに使用）
 
@@ -336,6 +324,7 @@ function render() {
   if (!state.daily) return;
   let html;
   if (dateIsPast(state.viewDate)) html = renderReadOnlyScreen();
+  else if (dateIsToday(state.viewDate) && !state.daily.started) html = renderStartTodayScreen();
   else if (!state.daily.created) html = renderCreateScreen();
   else html = renderHomeScreen();
   appRoot.innerHTML = html;
@@ -406,11 +395,17 @@ function renderItemCard(item, editMode, draggable, interactive = true) {
     <div class="item-edit-row">
       <div class="time-field">
         <span class="time-field-label">開始</span>
-        <input type="time" value="${esc(item.start || "")}" data-item-field="start" data-item-id="${item.id}" />
+        <div class="time-field-row">
+          <input type="time" value="${esc(item.start || "")}" data-item-field="start" data-item-id="${item.id}" />
+          <button type="button" class="time-clear-btn" data-action="clear-item-time" data-item-id="${item.id}" data-field="start" aria-label="開始時間をリセット">✕</button>
+        </div>
       </div>
       <div class="time-field">
         <span class="time-field-label">終了（任意）</span>
-        <input type="time" value="${esc(item.end || "")}" data-item-field="end" data-item-id="${item.id}" />
+        <div class="time-field-row">
+          <input type="time" value="${esc(item.end || "")}" data-item-field="end" data-item-id="${item.id}" />
+          <button type="button" class="time-clear-btn" data-action="clear-item-time" data-item-id="${item.id}" data-field="end" aria-label="終了時間をリセット">✕</button>
+        </div>
       </div>
       <input type="text" placeholder="メモ" value="${esc(item.memo || "")}" data-item-field="memo" data-item-id="${item.id}" />
     </div>` : "";
@@ -483,6 +478,32 @@ function renderFreeAddForm() {
     </div>`;
 }
 let freeAddCategory = "do";
+
+/* ---- 7-4b. ヘッダーの電光掲示板メッセージ（おうちの人設定でON/OFF・内容編集） ---- */
+function renderHeaderTicker() {
+  const s = state.settings;
+  const msg = (s.tickerMessage || "").trim();
+  if (!s.tickerEnabled || !msg) return "";
+  const duration = Math.max(6, msg.length * 0.35);
+  return `
+    <div class="header-ticker">
+      <div class="header-ticker-track" style="animation-duration:${duration}s;">${esc(msg)}</div>
+    </div>`;
+}
+
+/* ---- 7-4c. 「きょうをはじめる」画面（今日のページに朝いちばんでアクセスした時だけ表示） ---- */
+function renderStartTodayScreen() {
+  return `
+    <div class="create-screen">
+      <div class="create-header">
+        ${renderDateNav()}
+      </div>
+      <div class="start-today-wrap">
+        <div class="start-today-message">おはよう！<br>きょうのじゅんびをしよう</div>
+        <button class="start-today-btn" data-action="start-today">きょうをはじめる</button>
+      </div>
+    </div>`;
+}
 
 /* ---- 7-5. 「予定を作る」画面（今日／未来日どちらも使う） ---- */
 let createDraftItems = null; // この画面内だけで使う一時的な下書き
@@ -581,6 +602,7 @@ function renderHomeScreen() {
         ${state.daily.stamp ? `<div class="home-stamp">${state.daily.stamp}</div>` : ""}
         ${state.daily.challengeStamp ? `<div class="home-stamp">${state.daily.challengeStamp}</div>` : ""}
       </div>
+      ${renderHeaderTicker()}
     </div>
     <div class="item-list ${state.editMode ? "editing" : ""}">
       <div class="home-col-left">
@@ -607,6 +629,12 @@ function renderReadOnlyScreen() {
   const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
   const cardsHtml = timed.concat(untimedDo, untimedWant, untimedChallenge).map((it) => renderItemCard(it, false, false, false)).join("");
   const listHtml = cardsHtml || `<div class="empty-hint">記録なし</div>`;
+  const d = state.daily;
+  const momReadonly = (d.parentNote && d.parentNote.trim()) || d.parentChecked ? `
+    <div class="mom-check-readonly">
+      ${d.parentNote && d.parentNote.trim() ? `<div>ひとことメッセージ：<br>${esc(d.parentNote)}</div>` : ""}
+      ${d.parentChecked ? `<div class="mom-checked-badge">みました💮</div>` : ""}
+    </div>` : "";
 
   return `
     <div class="home-header">
@@ -620,6 +648,7 @@ function renderReadOnlyScreen() {
     <div class="readonly-hint">過去の記録です（編集はできません）</div>
     <div class="item-list">
       <div class="home-col-left">
+        ${momReadonly}
         ${listHtml}
       </div>
     </div>`;
@@ -764,6 +793,11 @@ function renderParentSettings() {
       </div>
     </div>
     <div class="parent-section">
+      <div class="parent-section-title">ヘッダーの電光掲示板メッセージ</div>
+      <label class="parent-checkbox-row"><input type="checkbox" id="setting-tickerEnabled" ${s.tickerEnabled ? "checked" : ""} /> 表示する</label>
+      <input type="text" id="setting-tickerMessage" value="${esc(s.tickerMessage || "")}" placeholder="流したいメッセージ" style="width:100%; margin-top:8px;" />
+    </div>
+    <div class="parent-section">
       <div class="parent-section-title">応援メッセージ（1行＝1件）</div>
       <textarea id="setting-cheerMessages" rows="6">${esc(s.cheerMessages.join("\n"))}</textarea>
       <button class="save-msg-btn" data-action="save-cheer-messages">メッセージを保存</button>
@@ -838,6 +872,14 @@ async function onAppClick(e) {
     render();
   }
 
+  if (action === "clear-item-time") {
+    const items = currentItemsRef();
+    const it = items.find((x) => x.id === btn.dataset.itemId);
+    if (it) it[btn.dataset.field] = "";
+    persistDailyIfCreated();
+    render();
+  }
+
   if (action === "toggle-group") {
     const g = btn.dataset.group;
     if (state.openGroups.has(g)) state.openGroups.delete(g); else state.openGroups.add(g);
@@ -892,6 +934,19 @@ async function onAppClick(e) {
     state.daily = { ...state.daily, created: true, items: withOrder };
     await fsSaveDailyPlan(state.viewDate, state.daily);
     createDraftItems = null;
+    render();
+  }
+
+  if (action === "start-today") {
+    const existing = state.daily.items || [];
+    const existingNames = new Set(existing.map((it) => it.name));
+    const extra = state.templates
+      .filter((t) => t.dailyFlag && !existingNames.has(t.name))
+      .map((t, i) => templateToItem(t, existing.length + i + 1));
+    const merged = existing.concat(extra);
+    state.daily = { ...state.daily, created: true, started: true, items: merged };
+    state.editMode = true;
+    await fsSaveDailyPlan(state.viewDate, state.daily);
     render();
   }
 
@@ -1103,6 +1158,11 @@ function onSettingsInput(e) {
     clearTimeout(templateSaveTimers["__passcode"]);
     templateSaveTimers["__passcode"] = setTimeout(() => fsSaveSettings(state.settings), 500);
   }
+  if (el.id === "setting-tickerMessage") {
+    state.settings.tickerMessage = el.value;
+    clearTimeout(templateSaveTimers["__ticker"]);
+    templateSaveTimers["__ticker"] = setTimeout(() => fsSaveSettings(state.settings), 500);
+  }
 }
 
 async function onSettingsChange(e) {
@@ -1113,6 +1173,10 @@ async function onSettingsChange(e) {
   }
   if (el.id === "setting-challengeEnabled") {
     state.settings.challengeEnabled = el.checked;
+    await fsSaveSettings(state.settings);
+  }
+  if (el.id === "setting-tickerEnabled") {
+    state.settings.tickerEnabled = el.checked;
     await fsSaveSettings(state.settings);
   }
   const field = el.dataset.tfield;
