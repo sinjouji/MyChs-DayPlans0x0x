@@ -5,7 +5,7 @@
 
 /* ---- Firebaseプロジェクトの接続情報 ----
    Firebaseコンソール → プロジェクトの設定 → マイアプリ から取得できます。 */
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyDBj4SmdltBms4tNnoagrz8U3WhC0upq4c",
   authDomain: "mychs-dayplans0x0x.firebaseapp.com",
   projectId: "mychs-dayplans0x0x",
