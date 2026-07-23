@@ -188,6 +188,7 @@ function emptyDaily(date) {
     stamp: null, completeShown: false,               // 「やること」完了のスタンプ
     challengeStamp: null, challengeCompleteShown: false, // 「チャレンジ」完了のスタンプ（初回のみ）
     parentNote: "", parentChecked: false,             // おかあさんチェック
+    dayEvent: "",                                     // その日の特別な予定（例：夏祭り）。今日〜未来分は編集可
   };
 }
 
@@ -582,6 +583,18 @@ function orderAllItems(visibleItems) {
   return { timed, untimedDo, untimedWant, untimedChallenge };
 }
 
+// その日の特別な予定バナー（例：夏祭り）。今日〜未来分はタップして編集できる。パスコード保護なし
+function renderDayEventBanner(editable) {
+  const text = (state.daily.dayEvent || "").trim();
+  if (!text) {
+    if (!editable) return "";
+    return `<button type="button" class="day-event-banner empty" data-action="edit-day-event">＋ 今日の特別な予定を追加</button>`;
+  }
+  const tag = editable ? "button" : "div";
+  const actionAttr = editable ? `data-action="edit-day-event" type="button"` : "";
+  return `<${tag} class="day-event-banner" ${actionAttr}>🎉 ${esc(text)}</${tag}>`;
+}
+
 // おかあさんチェック（一言メッセージ／確認スタンプ）。おうちの人パスコードで保護する
 function renderMomCheckArea() {
   const d = state.daily;
@@ -638,6 +651,7 @@ function renderHomeScreen() {
       </div>
       ${renderHeaderTicker()}
     </div>
+    ${renderDayEventBanner(true)}
     <div class="item-list ${state.editMode ? "editing" : ""}">
       <div class="home-col-left">
         ${listHtml}
@@ -678,6 +692,7 @@ function renderReadOnlyScreen() {
         ${state.daily.challengeStamp ? `<div class="home-stamp">${state.daily.challengeStamp}</div>` : ""}
       </div>
     </div>
+    ${renderDayEventBanner(false)}
     <div class="readonly-hint">過去の記録です（編集はできません）</div>
     <div class="item-list">
       <div class="home-col-left">
@@ -1034,6 +1049,14 @@ async function onAppClick(e) {
 
   if (action === "start-edit") { state.editMode = true; render(); }
   if (action === "finish-edit") { state.editMode = false; render(); }
+
+  if (action === "edit-day-event") {
+    const val = prompt("今日の特別な予定（例：夏祭り）", state.daily.dayEvent || "");
+    if (val === null) return;
+    state.daily.dayEvent = val.trim();
+    persistDailyIfCreated();
+    render();
+  }
 
   if (action === "edit-mom-note") {
     const pass = prompt("おうちの人用パスコードを入力してください");

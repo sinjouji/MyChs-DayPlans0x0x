@@ -158,6 +158,33 @@ input, select, textarea {
 }
 
 /* ---- 過去ログのおかあさんチェック表示 ---- */
+/* ---- その日の特別な予定バナー（例：夏祭り）。白背景＋カラフルな太枠で目立たせる ---- */
+.day-event-banner {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 0 16px 10px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background-color: var(--surface);
+  background-image: linear-gradient(var(--surface), var(--surface)),
+    linear-gradient(90deg, var(--do-color), var(--challenge-color), var(--want-color));
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  border: 3px solid transparent;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+  text-align: center;
+  flex-shrink: 0;
+}
+.day-event-banner.empty {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background-image: none;
+  border: 2px dashed var(--line);
+}
+
 .mom-check-readonly {
   background: var(--surface);
   border-radius: 16px;
