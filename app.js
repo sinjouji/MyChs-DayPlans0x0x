@@ -197,7 +197,17 @@ function templateToItem(t, orderOverride) {
     id: uid(), name: t.name, furigana: t.furigana || "", maxGrade: t.maxGrade || 6,
     category: t.category, start: t.defaultStart || "", end: t.defaultEnd || "",
     memo: "", checked: false, order: orderOverride ?? 0,
+    challengeTrigger: !!t.challengeTrigger, // この項目のチェックだけでチャレンジを解放するか
   };
+}
+// 「やること」内の1項目だけをチャレンジ解放のトリガーに設定できる。
+// 設定されていればその項目のcheckedのみで判定、なければ従来通り全「やること」完了で判定
+function isChallengeUnlocked(items, settings) {
+  if (!settings.challengeEnabled) return false;
+  const doItems = items.filter((it) => it.category === "do");
+  const trigger = doItems.find((it) => it.challengeTrigger);
+  if (trigger) return !!trigger.checked;
+  return doItems.length > 0 && doItems.every((it) => it.checked);
 }
 
 /* ============================================================================
@@ -422,6 +432,10 @@ function renderItemCard(item, editMode, draggable, interactive = true, warnUndon
         </div>
       </div>
       <input type="text" placeholder="メモ" value="${esc(item.memo || "")}" data-item-field="memo" data-item-id="${item.id}" />
+      ${item.category === "do" ? `
+        <button type="button" class="challenge-trigger-btn ${item.challengeTrigger ? "active" : ""}" data-action="toggle-challenge-trigger" data-item-id="${item.id}">
+          ${item.challengeTrigger ? "🔑 これがチャレンジの鍵" : "チャレンジの鍵にする"}
+        </button>` : ""}
     </div>` : "";
   const deleteBtn = editMode
     ? `<button class="item-delete-btn" data-action="delete-item" data-item-id="${item.id}">✕</button>` : "";
@@ -585,7 +599,7 @@ function renderMomCheckArea() {
 
 function renderHomeScreen() {
   const doItems = state.daily.items.filter((it) => it.category === "do");
-  const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
+  const challengeUnlocked = isChallengeUnlocked(state.daily.items, state.settings);
   // 編集モード中はチャレンジ項目も常に見えるようにする（閲覧モードのみ「やること」完了まで隠す）
   const visibleItems = state.editMode
     ? state.daily.items
@@ -643,8 +657,7 @@ function renderReadOnlyScreen() {
       <div class="home-header"><div>${renderDateNav()}<div class="home-title">きろく</div></div></div>
       <div class="item-list"><div class="home-col-left"><div class="empty-hint">この日の記録はありません</div></div></div>`;
   }
-  const doItems = state.daily.items.filter((it) => it.category === "do");
-  const challengeUnlocked = state.settings.challengeEnabled && doItems.length > 0 && doItems.every((it) => it.checked);
+  const challengeUnlocked = isChallengeUnlocked(state.daily.items, state.settings);
   const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
   const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
   const cardsHtml = timed.concat(untimedDo, untimedWant, untimedChallenge).map((it) => renderItemCard(it, false, false, false)).join("");
@@ -787,6 +800,10 @@ function renderTemplateSettings() {
           <input type="checkbox" data-tfield="dailyFlag" ${t.dailyFlag ? "checked" : ""} /> 毎日追加
         </label>
       </div>
+      ${t.category === "do" ? `
+        <button type="button" class="challenge-trigger-btn ${t.challengeTrigger ? "active" : ""}" data-action="toggle-template-challenge-trigger" data-template-id="${t.id}" style="margin-top:8px;">
+          ${t.challengeTrigger ? "🔑 これがチャレンジの鍵（毎日）" : "毎日チャレンジの鍵にする"}
+        </button>` : ""}
     </div>`).join("");
 
   return `<div class="template-grid">${cards}</div><button class="add-template-btn" data-action="add-template-def">＋ テンプレートを追加</button>`;
@@ -930,6 +947,17 @@ async function onAppClick(e) {
     const items = currentItemsRef();
     const it = items.find((x) => x.id === btn.dataset.itemId);
     if (it) it[btn.dataset.field] = "";
+    persistDailyIfCreated();
+    render();
+  }
+
+  if (action === "toggle-challenge-trigger") {
+    const items = currentItemsRef();
+    const it = items.find((x) => x.id === btn.dataset.itemId);
+    if (!it) return;
+    const turnOn = !it.challengeTrigger;
+    items.forEach((x) => { if (x.category === "do") x.challengeTrigger = false; }); // 1つだけに限定
+    it.challengeTrigger = turnOn;
     persistDailyIfCreated();
     render();
   }
@@ -1145,6 +1173,20 @@ async function onSettingsClick(e) {
     if (!t) return;
     t.category = btn.dataset.cat;
     await fsUpdateTemplate(t.id, { category: t.category });
+    renderSettingsPanel();
+  }
+  if (action === "toggle-template-challenge-trigger") {
+    const t = state.templates.find((x) => x.id === btn.dataset.templateId);
+    if (!t) return;
+    const turnOn = !t.challengeTrigger;
+    for (const other of state.templates) {
+      if (other.category === "do" && other.challengeTrigger) {
+        other.challengeTrigger = false;
+        if (other.id !== t.id) await fsUpdateTemplate(other.id, { challengeTrigger: false });
+      }
+    }
+    t.challengeTrigger = turnOn;
+    await fsUpdateTemplate(t.id, { challengeTrigger: turnOn });
     renderSettingsPanel();
   }
   if (action === "add-template-def") {

@@ -358,6 +358,16 @@ input, select, textarea {
   font-size: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; background: var(--surface-soft);
 }
 .item-edit-row input[type="text"] { flex: 1; min-width: 80px; }
+.challenge-trigger-btn {
+  font-size: 12px; font-weight: 700;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--surface-soft); color: var(--ink-soft);
+  border: 1px solid var(--line);
+  width: 100%; margin-top: 6px;
+}
+.challenge-trigger-btn.active {
+  background: var(--challenge-color); color: var(--accent-text); border-color: var(--challenge-color);
+}
 .item-delete-btn { flex-shrink: 0; color: var(--ink-soft); padding: 4px; font-size: 16px; }
 .item-card[draggable="true"] { cursor: grab; }
 .item-card.drag-over { outline: 2px dashed var(--accent); outline-offset: 2px; }
