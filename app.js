@@ -618,8 +618,8 @@ function renderHomeScreen() {
   // 表示順：時間指定 → やること → やりたいこと → チャレンジ
   const cardsHtml = timed.map((it) => renderItemCard(it, state.editMode, false, true, warnActive)).join("")
     + untimedDo.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
-    + untimedWant.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
     + untimedChallenge.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
+    + untimedWant.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
     + challengeHint;
   const totalCount = timed.length + untimedDo.length + untimedWant.length + untimedChallenge.length;
   const listHtml = (totalCount === 0 && !challengeHint) ? `<div class="empty-hint">予定なし</div>` : cardsHtml;
@@ -660,7 +660,7 @@ function renderReadOnlyScreen() {
   const challengeUnlocked = isChallengeUnlocked(state.daily.items, state.settings);
   const visibleItems = state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
   const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
-  const cardsHtml = timed.concat(untimedDo, untimedWant, untimedChallenge).map((it) => renderItemCard(it, false, false, false)).join("");
+  const cardsHtml = timed.concat(untimedDo, untimedChallenge, untimedWant).map((it) => renderItemCard(it, false, false, false)).join("");
   const listHtml = cardsHtml || `<div class="empty-hint">記録なし</div>`;
   const d = state.daily;
   const momReadonly = (d.parentNote && d.parentNote.trim()) || d.parentChecked ? `
