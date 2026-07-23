@@ -99,6 +99,15 @@ function playCompleteFanfare() {
   } catch (e) { /* noop */ }
 }
 
+// 鳩時計風チャイム：「パッ・ポー」の2音（7時・12時・20時に鳴らす）
+function playCuckooChime() {
+  try {
+    const t = getAudioCtx().currentTime;
+    playTone(880, t, 0.22, "sine", 0.18);
+    playTone(660, t + 0.26, 0.42, "sine", 0.18);
+  } catch (e) { /* noop */ }
+}
+
 const DEFAULT_SETTINGS = {
   furiganaMode: "grade",   // always | grade | none
   clockMode: "both",       // analog | digital | both
@@ -107,6 +116,9 @@ const DEFAULT_SETTINGS = {
   childGrade: 1,
   tickerEnabled: false,    // ヘッダーの電光掲示板メッセージ表示ON/OFF
   tickerMessage: "",       // ヘッダーの電光掲示板メッセージ内容
+  autoRefreshHours: 0,     // 0=自動更新オフ。1/2/3/6/12時間ごとにデータを再取得
+  undoneWarningEnabled: true, // 夜、未完了の「やること」をアクセントカラーで知らせるか
+  undoneWarningHour: 20,      // 何時から知らせるか（24時間表記）
   cheerMessages: [
     "今日もよくがんばったね",
     "今日はいっぱい遊ぼう♪",
@@ -312,6 +324,7 @@ const state = {
   dragFromId: null,
   openGroups: new Set(),   // トグルで開いているテンプレートグループ名。明示的に閉じるまで開いたまま保持
   freeAddOpen: false,      // 「＋新しく入力」フォームを表示中か
+  lastDataRefresh: Date.now(), // 自動更新の基準時刻
 };
 
 /* ============================================================================
@@ -381,8 +394,9 @@ setInterval(renderClock, 10000);
 
 /* ---- 7-3. 項目カード
    interactive=false のときはチェック操作もできない完全な読み取り専用表示（過去ログ用） ---- */
-function renderItemCard(item, editMode, draggable, interactive = true) {
+function renderItemCard(item, editMode, draggable, interactive = true, warnUndone = false) {
   const color = CATEGORY_COLOR_VAR[item.category];
+  const isUndoneWarn = warnUndone && item.category === "do" && !item.checked;
   const timeBadge = item.start
     ? `<span class="item-time-badge">${esc(item.start)}${item.end ? `〜${esc(item.end)}` : ""}</span>` : "";
   const showFurigana =
@@ -414,7 +428,7 @@ function renderItemCard(item, editMode, draggable, interactive = true) {
   const checkAction = interactive ? `data-action="toggle-item"` : "";
 
   return `
-    <div class="item-card" style="border-left-color:${color};" data-item-id="${item.id}" ${draggable ? 'draggable="true"' : ""}>
+    <div class="item-card ${isUndoneWarn ? "undone-warn" : ""}" style="border-left-color:${color};" data-item-id="${item.id}" ${draggable ? 'draggable="true"' : ""}>
       <button class="item-check" ${checkAction} data-item-id="${item.id}"
         style="background:${item.checked ? color : "var(--surface-soft)"}; border-color:${color}; ${interactive ? "" : "cursor:default;"}">
         ${item.checked ? "✓" : ""}
@@ -484,7 +498,7 @@ function renderHeaderTicker() {
   const s = state.settings;
   const msg = (s.tickerMessage || "").trim();
   if (!s.tickerEnabled || !msg) return "";
-  const duration = Math.max(6, msg.length * 0.35);
+  const duration = Math.max(10, msg.length * 0.6);
   return `
     <div class="header-ticker">
       <div class="header-ticker-track" style="animation-duration:${duration}s;">${esc(msg)}</div>
@@ -578,14 +592,20 @@ function renderHomeScreen() {
     : state.daily.items.filter((it) => it.category !== "challenge" || challengeUnlocked);
   const { timed, untimedDo, untimedWant, untimedChallenge } = orderAllItems(visibleItems);
 
+  // 夜、まだ「やること」が残っていたらカードをアクセントカラーで知らせる（親の設定でON/OFF・時刻変更可）
+  const warnActive = state.settings.undoneWarningEnabled
+    && dateIsToday(state.viewDate)
+    && new Date().getHours() >= state.settings.undoneWarningHour
+    && doItems.length > 0 && !doItems.every((it) => it.checked);
+
   const challengeHint = !state.editMode && state.settings.challengeEnabled && !challengeUnlocked && state.daily.items.some((it) => it.category === "challenge")
     ? `<div class="challenge-hint">「やること」が終わったら チャレンジ が出てくるよ</div>` : "";
 
   // 表示順：時間指定 → やること → やりたいこと → チャレンジ
-  const cardsHtml = timed.map((it) => renderItemCard(it, state.editMode, false)).join("")
-    + untimedDo.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
-    + untimedWant.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
-    + untimedChallenge.map((it) => renderItemCard(it, state.editMode, state.editMode)).join("")
+  const cardsHtml = timed.map((it) => renderItemCard(it, state.editMode, false, true, warnActive)).join("")
+    + untimedDo.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
+    + untimedWant.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
+    + untimedChallenge.map((it) => renderItemCard(it, state.editMode, state.editMode, true, warnActive)).join("")
     + challengeHint;
   const totalCount = timed.length + untimedDo.length + untimedWant.length + untimedChallenge.length;
   const listHtml = (totalCount === 0 && !challengeHint) ? `<div class="empty-hint">予定なし</div>` : cardsHtml;
@@ -743,6 +763,22 @@ function renderTemplateSettings() {
         <input type="text" value="${esc(templateGroups(t).join("、"))}" data-tfield="groups" placeholder="グループ（複数は「、」区切り）" />
         <input type="number" value="${t.order}" data-tfield="order" placeholder="表示順" />
       </div>
+      <div class="template-edit-row two-col">
+        <div class="time-field">
+          <span class="time-field-label">デフォルト開始（任意）</span>
+          <div class="time-field-row">
+            <input type="time" value="${esc(t.defaultStart || "")}" data-tfield="defaultStart" />
+            <button type="button" class="time-clear-btn" data-action="clear-template-time" data-template-id="${t.id}" data-field="defaultStart" aria-label="デフォルト開始時間をリセット">✕</button>
+          </div>
+        </div>
+        <div class="time-field">
+          <span class="time-field-label">デフォルト終了（任意）</span>
+          <div class="time-field-row">
+            <input type="time" value="${esc(t.defaultEnd || "")}" data-tfield="defaultEnd" />
+            <button type="button" class="time-clear-btn" data-action="clear-template-time" data-template-id="${t.id}" data-field="defaultEnd" aria-label="デフォルト終了時間をリセット">✕</button>
+          </div>
+        </div>
+      </div>
       <div class="template-cat-row">
         ${["do", "want", "challenge"].map((c) => `
           <button class="template-cat-btn ${t.category === c ? "active" : ""}" data-action="set-template-cat" data-template-id="${t.id}" data-cat="${c}"
@@ -796,6 +832,24 @@ function renderParentSettings() {
       <div class="parent-section-title">ヘッダーの電光掲示板メッセージ</div>
       <label class="parent-checkbox-row"><input type="checkbox" id="setting-tickerEnabled" ${s.tickerEnabled ? "checked" : ""} /> 表示する</label>
       <input type="text" id="setting-tickerMessage" value="${esc(s.tickerMessage || "")}" placeholder="流したいメッセージ" style="width:100%; margin-top:8px;" />
+    </div>
+    <div class="parent-section">
+      <div class="parent-section-title">自動更新</div>
+      <select id="setting-autoRefreshHours">
+        ${[[0, "オフ"], [1, "1時間ごと"], [2, "2時間ごと"], [3, "3時間ごと"], [6, "6時間ごと"], [12, "12時間ごと"]].map(([v, l]) => `
+          <option value="${v}" ${Number(s.autoRefreshHours) === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select>
+      <div class="data-io-hint">画面を開きっぱなしの時、他の端末からの変更を定期的に取り込みます</div>
+    </div>
+    <div class="parent-section">
+      <div class="parent-section-title">夜の未完了お知らせ</div>
+      <label class="parent-checkbox-row"><input type="checkbox" id="setting-undoneWarningEnabled" ${s.undoneWarningEnabled ? "checked" : ""} /> 有効にする</label>
+      <div style="margin-top:8px;">
+        <select id="setting-undoneWarningHour">
+          ${[...Array(24)].map((_, h) => `<option value="${h}" ${s.undoneWarningHour === h ? "selected" : ""}>${h}時から</option>`).join("")}
+        </select>
+      </div>
+      <div class="data-io-hint">指定の時刻を過ぎても「やること」が残っていたら、そのカードをアクセントカラーで知らせます</div>
     </div>
     <div class="parent-section">
       <div class="parent-section-title">応援メッセージ（1行＝1件）</div>
@@ -1079,6 +1133,13 @@ async function onSettingsClick(e) {
     state.templates = state.templates.filter((t) => t.id !== btn.dataset.templateId);
     renderSettingsPanel();
   }
+  if (action === "clear-template-time") {
+    const t = state.templates.find((x) => x.id === btn.dataset.templateId);
+    if (!t) return;
+    t[btn.dataset.field] = "";
+    await fsUpdateTemplate(t.id, { [btn.dataset.field]: "" });
+    renderSettingsPanel();
+  }
   if (action === "set-template-cat") {
     const t = state.templates.find((x) => x.id === btn.dataset.templateId);
     if (!t) return;
@@ -1178,6 +1239,20 @@ async function onSettingsChange(e) {
   if (el.id === "setting-tickerEnabled") {
     state.settings.tickerEnabled = el.checked;
     await fsSaveSettings(state.settings);
+  }
+  if (el.id === "setting-autoRefreshHours") {
+    state.settings.autoRefreshHours = Number(el.value);
+    await fsSaveSettings(state.settings);
+  }
+  if (el.id === "setting-undoneWarningEnabled") {
+    state.settings.undoneWarningEnabled = el.checked;
+    await fsSaveSettings(state.settings);
+    render();
+  }
+  if (el.id === "setting-undoneWarningHour") {
+    state.settings.undoneWarningHour = Number(el.value);
+    await fsSaveSettings(state.settings);
+    render();
   }
   const field = el.dataset.tfield;
   const card = el.closest(".template-edit-card");
@@ -1289,13 +1364,14 @@ async function boot() {
   state.daily = daily || emptyDaily(state.today);
   const yesterday = await fsGetDailyPlan(shiftDate(state.today, -1));
   state.yesterdayItems = yesterday && yesterday.items ? yesterday.items : null;
+  state.lastDataRefresh = Date.now();
 
   loadingScreen.classList.add("hidden");
   appRoot.classList.remove("hidden");
   document.getElementById("top-right-nav").classList.remove("hidden");
   render();
 
-  // 日付が4時をまたいだら「今日」を再計算（表示中の過去日ブラウズは邪魔しない）
+  // 毎分チェック：日付の切り替わり／自動更新／鳩時計チャイム
   setInterval(() => {
     const nowToday = getAppDate();
     if (nowToday !== state.today) {
@@ -1303,7 +1379,37 @@ async function boot() {
       state.today = nowToday;
       if (wasOnToday) loadViewDate(nowToday);
     }
+
+    // 自動更新（親の設定で〇時間ごと。0=オフ）
+    const hours = Number(state.settings.autoRefreshHours) || 0;
+    if (hours > 0 && Date.now() - state.lastDataRefresh >= hours * 3600 * 1000) {
+      refreshData();
+    }
+
+    checkHourlyChime();
   }, 60000);
+}
+
+// テンプレート・設定・表示中の日付データをFirestoreから再取得する（自動更新用）
+async function refreshData() {
+  state.settings = await fsGetSettings();
+  state.templates = await fsGetTemplates();
+  const plan = await fsGetDailyPlan(state.viewDate);
+  state.daily = plan || emptyDaily(state.viewDate);
+  state.lastDataRefresh = Date.now();
+  render();
+}
+
+// 鳩時計風チャイム：7時・12時・20時になったら1回だけ「パッポー」を鳴らす
+const playedChimeHours = new Set();
+function checkHourlyChime() {
+  const now = new Date();
+  const h = now.getHours(), m = now.getMinutes();
+  if (![7, 12, 20].includes(h) || m !== 0) return;
+  const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${h}`;
+  if (playedChimeHours.has(key)) return;
+  playedChimeHours.add(key);
+  playCuckooChime();
 }
 
 initAuth();

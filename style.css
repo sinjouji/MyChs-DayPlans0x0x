@@ -109,13 +109,13 @@ input, select, textarea {
 .header-ticker {
   flex: 1;
   align-self: center;
-  height: 40px;
+  height: 64px;
   min-width: 0;
   overflow: hidden;
   position: relative;
   margin: 0 10px;
   background: var(--surface);
-  border-radius: 10px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
 }
@@ -123,7 +123,7 @@ input, select, textarea {
   position: absolute;
   top: 50%;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 28px;
   font-weight: 700;
   color: var(--ink);
   animation-name: header-ticker-scroll;
@@ -322,6 +322,14 @@ input, select, textarea {
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
   border-left-width: 6px;
   border-left-style: solid;
+}
+.item-card.undone-warn {
+  background: var(--accent);
+}
+.item-card.undone-warn .item-name,
+.item-card.undone-warn .item-memo,
+.item-card.undone-warn .item-time-badge {
+  color: var(--accent-text);
 }
 .item-check {
   flex-shrink: 0;
