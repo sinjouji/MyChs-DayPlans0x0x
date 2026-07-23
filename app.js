@@ -527,6 +527,7 @@ function renderStartTodayScreen() {
       <div class="create-header">
         ${renderDateNav()}
       </div>
+      ${renderDayEventBanner(true)}
       <div class="start-today-wrap">
         <div class="start-today-message">おはよう！<br>きょうのじゅんびをしよう</div>
         <button class="start-today-btn" data-action="start-today">きょうをはじめる</button>
@@ -563,6 +564,7 @@ function renderCreateScreen() {
         ${renderDateNav()}
         <div class="subtitle" style="margin-top:10px;">${titleLabel}</div>
       </div>
+      ${renderDayEventBanner(true)}
       <div class="create-list" id="create-list">${listHtml}${copyBtn}</div>
       ${renderTemplatePicker()}
       <div class="create-confirm-bar">
@@ -1054,7 +1056,7 @@ async function onAppClick(e) {
     const val = prompt("今日の特別な予定（例：夏祭り）", state.daily.dayEvent || "");
     if (val === null) return;
     state.daily.dayEvent = val.trim();
-    persistDailyIfCreated();
+    await fsSaveDailyPlan(state.viewDate, state.daily); // created前でも必ず保存する
     render();
   }
 
